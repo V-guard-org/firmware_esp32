@@ -1,10 +1,74 @@
-// Firmware do ESP32 do V-GUARD (proposta §4). Por enquanto, só o esqueleto (#1).
+// Firmware do ESP32 do V-GUARD (proposta §4). Por enquanto, ele se apresenta pela USB: $B ao
+// ligar e um $S por segundo, sempre em ESPERA (#2). A hora pelo $H vem no #3.
 #include <Arduino.h>
+#include <esp_log.h>
+#include <esp_system.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
 #include "config.h"
+#include "protocolo.h"
+#include "serial_pi.h"
 
 static_assert(__cplusplus >= 201703L, "o firmware usa C++17 (proposta §4.8)");
 
-void setup() {}
+namespace {
 
-void loop() {}
+using vguard::protocolo::Estado;
+using vguard::protocolo::EstadoImu;
+using vguard::protocolo::EstadoObd;
+using vguard::protocolo::EstadoSd;
+using vguard::protocolo::MotivoReset;
+using vguard::protocolo::Status;
+
+// Sem a hora da Pi, o t vale 0 (proposta §5.2).
+constexpr uint64_t sem_hora = 0;
+
+// O motivo que o ESP32 informa, nos nomes do $B (proposta §5.3).
+MotivoReset motivo_do_reset() {
+  switch (esp_reset_reason()) {
+    // No ESP32 clássico, o botão EN e o reinício pela USB também aparecem como ligar.
+    case ESP_RST_POWERON: return MotivoReset::ligou;
+    case ESP_RST_SW: return MotivoReset::software;
+    case ESP_RST_PANIC: return MotivoReset::pane;
+    case ESP_RST_INT_WDT:
+    case ESP_RST_TASK_WDT:
+    case ESP_RST_WDT: return MotivoReset::watchdog;
+    case ESP_RST_BROWNOUT: return MotivoReset::queda_tensao;
+    default: return MotivoReset::outro;
+  }
+}
+
+// As peças que ainda não existem saem com valores que não fingem funcionar (proposta §4.8).
+Status status_atual(uint32_t uptime_s) {
+  Status status{};
+  status.uptime_s = uptime_s;
+  status.estado = Estado::espera;
+  status.obd = EstadoObd::parado;
+  status.imu = EstadoImu::falha;
+  status.sd = EstadoSd::ausente;
+  status.sd_livre = 0;
+  status.obd_hz_decimos = vguard::config::obd_hz_inicial_decimos;
+  return status;
+}
+
+// Segundos desde o início das tarefas, um a mais por $S.
+uint32_t uptime_s = 0;
+// Último despertar do loop(). Começando em 0, o $S sai em 1 s, 2 s, 3 s... sem acumular atraso.
+TickType_t ultimo_status = 0;
+
+}  // namespace
+
+void setup() {
+  // Na USB, só as linhas do protocolo: um aviso do ESP-IDF no meio de uma linha a corromperia.
+  esp_log_level_set("*", ESP_LOG_NONE);
+  vguard::serial_pi::iniciar();
+  vguard::serial_pi::emitir_boot(sem_hora, motivo_do_reset());
+  vguard::serial_pi::emitir_status(sem_hora, status_atual(uptime_s));
+}
+
+void loop() {
+  vTaskDelayUntil(&ultimo_status, pdMS_TO_TICKS(vguard::config::periodo_status_ms));
+  ++uptime_s;
+  vguard::serial_pi::emitir_status(sem_hora, status_atual(uptime_s));
+}

@@ -26,6 +26,20 @@ Precisa do [PlatformIO](https://platformio.org/), pela extensão do VS Code ou p
 | `simulador` | A ECU simulada, num 2º ESP32 com outro MCP2515 | `pio run -e simulador -t upload` |
 | `native` | Os testes do núcleo, no notebook | `pio test -e native` |
 
-Para ver a serial: `pio device monitor` (115200 baud). Para conferir as regras do núcleo (`CODING_STANDARDS.md`): `python ferramentas/checa_nucleo.py`.
+Para conferir as regras do núcleo (`CODING_STANDARDS.md`): `python ferramentas/checa_nucleo.py`.
+
+## Ferramenta de bancada
+
+`ferramentas/bancada.py` lê a USB do ESP32 no notebook, mostra as linhas e confere o checksum e a `seq` de cada uma. Ao sair, mostra o resumo: linhas válidas, corrompidas e perdidas.
+
+| Comando | O que faz |
+|---|---|
+| `uv run ferramentas/bancada.py` | Mostra as linhas até o Ctrl+C |
+| `uv run ferramentas/bancada.py --segundos 300` | Captura 5 min, mostra só os problemas e o resumo, e sai com erro se houver linha corrompida ou lacuna na `seq` |
+| `uv run ferramentas/bancada.py --reiniciar` | Reinicia o ESP32 pelo EN ao abrir a porta, para pegar o `$B` |
+
+Sem `--porta`, ela acha a placa pelo chip USB (CP210x ou CH340/CH9102). O `uv` instala o pyserial sozinho; sem ele, `pip install pyserial==3.5` e `python ferramentas/bancada.py`. Os testes dela: `python -m unittest discover -s ferramentas`.
+
+Para só ver a serial, sem conferir nada: `pio device monitor` (115200 baud).
 
 O trabalho está nas [Issues](https://github.com/V-guard-org/firmware_esp32/issues), e o jeito de trabalhar nelas está no `CLAUDE.md`.
