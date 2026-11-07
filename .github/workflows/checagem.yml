@@ -1,5 +1,5 @@
-# Em cada PR e no main: as regras e os testes do núcleo e a compilação do firmware e do
-# simulador (proposta §4.8).
+# Em cada PR e no main: as regras e os testes do núcleo, os testes da ferramenta de bancada e a
+# compilação do firmware e do simulador (proposta §4.8).
 name: checagem
 
 on:
@@ -26,6 +26,8 @@ jobs:
         run: python ferramentas/checa_nucleo.py
       - name: Testes do núcleo
         run: pio test -e native
+      - name: Testes da ferramenta de bancada
+        run: python -m unittest discover -s ferramentas
       - name: Compilar o firmware
         run: pio run -e esp32
       - name: Compilar o simulador

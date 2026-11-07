@@ -2,6 +2,7 @@
 // O simulador também inclui este arquivo, para usar os mesmos pinos do MCP2515.
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
 namespace vguard {
@@ -31,5 +32,24 @@ constexpr uint8_t imu_scl = 22;
 
 // Endereço do ADXL345 no I²C.
 constexpr uint8_t endereco_imu = 0x53;
+
+namespace config {
+
+// Serial com a Pi pela USB (proposta §5): 115200 baud, 8N1, sem controle de fluxo.
+constexpr unsigned long serial_baud = 115200;
+// Buffer na RAM antes da UART: ~0,2 s da serial a toda velocidade, ou ~0,7 s da carga normal
+// (~3 KB/s com o OBD a 12,5 pedidos/s, proposta §5.5).
+constexpr size_t serial_tamanho_saida = 2048;
+// A tarefa que passa o buffer para a UART: pilha em bytes e prioridade (acima do loop()).
+constexpr uint32_t serial_pilha_escrita = 3072;
+constexpr unsigned serial_prioridade_escrita = 2;
+
+// Taxa do OBD ao ligar, em décimos de pedido por segundo: 12,5 (proposta §4.3).
+constexpr uint16_t obd_hz_inicial_decimos = 125;
+
+// Período do $S (proposta §5.3).
+constexpr uint32_t periodo_status_ms = 1000;
+
+}  // namespace config
 
 }  // namespace vguard
