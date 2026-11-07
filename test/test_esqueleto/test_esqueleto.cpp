@@ -1,4 +1,4 @@
-// Confere, na compilação, que o ambiente native segue as regras do código (proposta §4.8):
+// Confere, na compilação, que o ambiente native segue as regras do código (CODING_STANDARDS.md):
 // C++17, sem exceções e sem RTTI. Os testes do núcleo chegam com os tickets seguintes.
 #include <unity.h>
 

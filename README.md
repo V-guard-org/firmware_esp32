@@ -26,6 +26,6 @@ Precisa do [PlatformIO](https://platformio.org/), pela extensão do VS Code ou p
 | `simulador` | A ECU simulada, num 2º ESP32 com outro MCP2515 | `pio run -e simulador -t upload` |
 | `native` | Os testes do núcleo, no notebook | `pio test -e native` |
 
-Para ver a serial: `pio device monitor` (115200 baud).
+Para ver a serial: `pio device monitor` (115200 baud). Para conferir as regras do núcleo (`CODING_STANDARDS.md`): `python ferramentas/checa_nucleo.py`.
 
 O trabalho está nas [Issues](https://github.com/V-guard-org/firmware_esp32/issues), e o jeito de trabalhar nelas está no `CLAUDE.md`.
