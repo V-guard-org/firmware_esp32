@@ -1,0 +1,30 @@
+# Em cada PR e no main: os testes do núcleo e a compilação do firmware e do simulador
+# (proposta §4.8).
+name: checagem
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  checagem:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Cache do PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: platformio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
+      - name: Instalar o PlatformIO
+        run: pip install platformio==6.2.0
+      - name: Testes do núcleo
+        run: pio test -e native
+      - name: Compilar o firmware
+        run: pio run -e esp32
+      - name: Compilar o simulador
+        run: pio run -e simulador

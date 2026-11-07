@@ -1,0 +1,6 @@
+{
+  "name": "nucleo",
+  "description": "Lógica pura do firmware, sem Arduino: roda no ESP32 e no notebook (proposta §4.8).",
+  "frameworks": "*",
+  "platforms": "*"
+}
