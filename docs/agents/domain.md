@@ -4,7 +4,9 @@ Como as skills de engenharia leem as decisões deste repositório.
 
 ## Antes de explorar, leia
 
-- **`../proposta-de-desenvolvimento.md`**, fora do repositório: é a especificação e o registro das decisões do V-GUARD. Para este repositório, importam mais a §4 (firmware), a §4.8 (organização e regras do código), a §5 (serial ESP32 ↔ Pi) e a §9 (roteiro de testes).
+- **`../proposta-de-desenvolvimento.md`**, fora do repositório: é a especificação e o registro das decisões do V-GUARD. Para este repositório, importam mais a §4 (firmware), a §4.8 (organização), a §5 (serial ESP32 ↔ Pi) e a §9 (roteiro de testes).
+
+A proposta é longa, então leia por seção: `grep -n '^#' ../proposta-de-desenvolvimento.md` dá a linha de cada título, e o `Read` com `offset` e `limit` traz só a seção que o trabalho pede.
 
 Se a proposta não estiver acessível, como num clone de outra pessoa, siga o ticket. Cada ticket traz os valores concretos de que precisa.
 

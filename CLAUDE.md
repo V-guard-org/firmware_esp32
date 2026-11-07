@@ -10,16 +10,14 @@ Seções principais: §4 (firmware), §4.8 (organização deste repositório), �
 
 ## Regras do código
 
-Estão na §4.8 da proposta, nos itens "Língua do código" e "Regras do código". Leia antes de escrever ou revisar código.
+Estão no `CODING_STANDARDS.md`. Leia antes de escrever ou revisar código.
 
 ## Fluxo por ticket
 
 1. Rode `git fetch` e confira o `git status`. Crie um ramo novo a partir do `origin/main`.
-2. Implemente com `/implement #N`, com os testes no núcleo (`pio test -e native`).
+2. Implemente com `/implement #N`, com os testes no núcleo (`pio test -e native`) e as regras dele (`python ferramentas/checa_nucleo.py`).
 3. Cada mensagem de commit cita o ticket (`#N`).
 4. Abra o PR com `Closes #N`. O Thiago revisa e faz o merge.
-
-Exceção: o esqueleto, o primeiro ticket, vai direto ao `main`.
 
 ## Agent skills
 

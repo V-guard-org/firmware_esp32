@@ -1,4 +1,4 @@
-# Faz o ambiente native imitar o ESP32 em C++: sem exceções e sem RTTI (proposta §4.8).
+# Faz o ambiente native imitar o ESP32 em C++: sem exceções e sem RTTI (CODING_STANDARDS.md).
 # -fno-rtti só vale para C++; em build_flags ele também iria para os .c (Unity) e, com
 # -Werror, quebraria o build. Por isso entra só em CXXFLAGS.
 # Origem: native_cxx.py do firmware_telemetria (origin/main).
