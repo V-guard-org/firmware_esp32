@@ -194,8 +194,51 @@ static void teste_linha_invalida_conta_como_descartada() {
   TEST_ASSERT_EQUAL_UINT32(1, emissor.descartadas());
 }
 
+static void teste_aviso_do_exemplo() {
+  DestinoDeTeste destino;
+  Emissor emissor(destino);
+  // As 70 primeiras linhas não cabem, só para a seq chegar à do exemplo da proposta.
+  destino.cheio = true;
+  for (int i = 0; i < 70; ++i) {
+    emissor.emitir_status(0, status_sem_pecas(0));
+  }
+  destino.cheio = false;
+  emissor.emitir_log(1793980813200ULL, Nivel::aviso, "PID 0F sem resposta");
+  TEST_ASSERT_EQUAL_STRING("$L,70,1793980813200,AVISO,PID 0F sem resposta*51\n",
+                           destino.linhas[0]);
+}
+
+static void teste_erro_e_texto_cortado_em_60_caracteres() {
+  DestinoDeTeste destino;
+  Emissor emissor(destino);
+  char texto[71];
+  std::memset(texto, 'x', 70);
+  texto[70] = '\0';
+  emissor.emitir_log(0, Nivel::erro, texto);
+  TEST_ASSERT_EQUAL_UINT(1, destino.quantidade);
+  // Só os 60 primeiros caracteres do texto entram.
+  char corpo[tamanho_maximo + 1];
+  std::snprintf(corpo, sizeof(corpo), "L,0,0,ERRO,%.60s", texto);
+  // Folga para o compilador ver que o snprintf não corta (o -Werror=format-truncation).
+  char esperado[sizeof(corpo) + 5];
+  std::snprintf(esperado, sizeof(esperado), "$%s*%02X\n", corpo,
+                checksum(corpo, std::strlen(corpo)));
+  TEST_ASSERT_EQUAL_STRING(esperado, destino.linhas[0]);
+}
+
+static void teste_aviso_com_caractere_da_moldura_e_descartado() {
+  DestinoDeTeste destino;
+  Emissor emissor(destino);
+  emissor.emitir_log(0, Nivel::aviso, "a*b");
+  TEST_ASSERT_EQUAL_UINT(0, destino.quantidade);
+  TEST_ASSERT_EQUAL_UINT32(1, emissor.descartadas());
+}
+
 int main() {
   UNITY_BEGIN();
+  RUN_TEST(teste_aviso_do_exemplo);
+  RUN_TEST(teste_erro_e_texto_cortado_em_60_caracteres);
+  RUN_TEST(teste_aviso_com_caractere_da_moldura_e_descartado);
   RUN_TEST(teste_checksum_e_o_xor_dos_caracteres);
   RUN_TEST(teste_linha_do_boot_do_exemplo);
   RUN_TEST(teste_linha_de_status_do_exemplo);
