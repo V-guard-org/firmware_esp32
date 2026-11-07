@@ -234,6 +234,27 @@ static void teste_aviso_com_caractere_da_moldura_e_descartado() {
   TEST_ASSERT_EQUAL_UINT32(1, emissor.descartadas());
 }
 
+static void teste_acelerometro_do_exemplo() {
+  DestinoDeTeste destino;
+  Emissor emissor(destino);
+  // As 57 primeiras linhas não cabem, só para a seq chegar à do exemplo da proposta.
+  destino.cheio = true;
+  for (int i = 0; i < 57; ++i) {
+    emissor.emitir_status(0, status_sem_pecas(0));
+  }
+  destino.cheio = false;
+  emissor.emitir_acelerometro(1793980812457ULL, 12, -5, 979);
+  TEST_ASSERT_EQUAL_STRING("$A,57,1793980812457,0.12,-0.05,9.79*6D\n", destino.linhas[0]);
+}
+
+static void teste_maior_acelerometro_cabe() {
+  // A maior seq, um t de 13 dígitos e os três eixos no fundo da faixa de ±16 g (−156,9 m/s²).
+  Linha linha('A');
+  linha.campo_inteiro(0xFFFFFFFFULL).campo_inteiro(9999999999999ULL);
+  linha.campo_decimal(-15691, 2).campo_decimal(-15691, 2).campo_decimal(-15691, 2);
+  TEST_ASSERT_TRUE(linha.fechar());
+}
+
 int main() {
   UNITY_BEGIN();
   RUN_TEST(teste_aviso_do_exemplo);
@@ -253,5 +274,7 @@ int main() {
   RUN_TEST(teste_linha_de_120_caracteres_passa_e_a_de_121_nao);
   RUN_TEST(teste_texto_com_caractere_da_moldura_invalida_a_linha);
   RUN_TEST(teste_linha_invalida_conta_como_descartada);
+  RUN_TEST(teste_acelerometro_do_exemplo);
+  RUN_TEST(teste_maior_acelerometro_cabe);
   return UNITY_END();
 }

@@ -23,6 +23,14 @@ def ativo(seq: int, uptime: int, t: int) -> bytes:
     return moldura(f"S,{seq},{t},{uptime},ATIVO,PARADO,FALHA,AUSENTE,0,12.5,0")
 
 
+def ativo_com(seq: int, uptime: int, imu: str = "OK", descartadas: int = 0) -> bytes:
+    return moldura(f"S,{seq},{HORA},{uptime},ATIVO,PARADO,{imu},AUSENTE,0,12.5,{descartadas}")
+
+
+def acel(seq: int, ax: str = "0.12", ay: str = "-0.05", az: str = "9.79", t: int = 0) -> bytes:
+    return moldura(f"A,{seq},{t or HORA},{ax},{ay},{az}")
+
+
 def valida(bruta: bytes) -> Valida:
     linha = ler_linha(bruta)
     assert isinstance(linha, Valida), linha
@@ -125,6 +133,81 @@ class TestConferencia(unittest.TestCase):
         self.assertTrue(c.falhou())
 
 
+class TestConferenciaDoAcelerometro(unittest.TestCase):
+    """O $A entre dois $S, as descartadas, o imu e as médias (#4)."""
+
+    def segundo(self, seq: int, quantidade: int) -> list[bytes]:
+        """quantidade $A a partir da seq, e o $S do fim do segundo."""
+        return [acel(seq + i) for i in range(quantidade)] + [ativo_com(seq + quantidade, 0)]
+
+    def conferir(self, linhas):
+        conferencia = Conferencia()
+        mensagens = []
+        for linha in linhas:
+            mensagens += conferencia.linha(linha)
+        mensagens += conferencia.terminar()
+        return conferencia, mensagens
+
+    def test_50_por_segundo_passa(self):
+        linhas = ([ativo_com(0, 0)] + self.segundo(1, 50) + self.segundo(52, 49)
+                  + self.segundo(102, 51))
+        c, _ = self.conferir(linhas)
+        self.assertEqual((0, 49, 51), (c.fora_da_taxa, c.menor_a_por_status, c.maior_a_por_status))
+        self.assertFalse(c.falhou())
+
+    def test_fora_de_49_a_51_falha(self):
+        c, mensagens = self.conferir([ativo_com(0, 0)] + self.segundo(1, 47) + self.segundo(49, 52))
+        self.assertEqual(2, c.fora_da_taxa)
+        self.assertTrue(any("47 $A" in m for m in mensagens))
+        self.assertTrue(c.falhou())
+
+    def test_segundo_que_entra_em_atividade_nao_conta(self):
+        # Do $S em ESPERA ao primeiro em ATIVO, o $A só começou no meio.
+        c, _ = self.conferir([status(0, 0)] + self.segundo(1, 20) + self.segundo(22, 50))
+        self.assertEqual((0, 50), (c.fora_da_taxa, c.menor_a_por_status))
+
+    def test_reinicio_recomeca_a_contagem(self):
+        linhas = ([ativo_com(0, 0)] + [acel(1), acel(2)] + ROM + [boot(), status(1, 0)]
+                  + self.segundo(2, 30) + self.segundo(33, 50))
+        c, _ = self.conferir(linhas)
+        self.assertEqual(0, c.fora_da_taxa)
+
+    def test_a_para_e_volta(self):
+        linhas = ([ativo_com(0, 0)] + self.segundo(1, 50) + self.segundo(52, 10)
+                  + [ativo_com(63, 0, imu="FALHA"), ativo_com(64, 0, imu="FALHA")]
+                  + self.segundo(65, 30) + self.segundo(96, 50))
+        c, mensagens = self.conferir(linhas)
+        # O segundo com 10, os 2 sem nenhum e o com 30.
+        self.assertEqual(4, c.fora_da_taxa)
+        self.assertEqual(1, sum("o $A parou" in m for m in mensagens))
+        self.assertEqual(1, sum("o $A voltou" in m for m in mensagens))
+        self.assertIn("-- imu: OK → FALHA", mensagens)
+        self.assertIn("-- imu: FALHA → OK", mensagens)
+        self.assertTrue(c.falhou())
+
+    def test_descartadas_falha_e_soma_o_que_subiu(self):
+        linhas = [ativo_com(0, 0), ativo_com(1, 0, descartadas=2), ativo_com(2, 0, descartadas=5)]
+        c, mensagens = self.conferir(linhas)
+        self.assertEqual(5, c.descartadas)
+        self.assertEqual(2, sum("descartou" in m for m in mensagens))
+        self.assertTrue(c.falhou())
+
+    def test_descartadas_recomecam_no_reinicio(self):
+        linhas = ([ativo_com(0, 0, descartadas=3)] + [boot(), ativo_com(1, 0, descartadas=1)])
+        c, _ = self.conferir(linhas)
+        self.assertEqual(4, c.descartadas)
+
+    def test_medias_no_resumo(self):
+        linhas = [acel(0, "0.10", "-0.10", "9.70"), acel(1, "0.30", "0.10", "9.90")]
+        c, _ = self.conferir(linhas)
+        self.assertEqual(2, c.quantidade_a)
+        self.assertIn("ax +0.20, ay +0.00, az +9.80, |a| 9.80 m/s² (2 linhas)", c.resumo())
+
+    def test_imu_aparece_no_primeiro_status(self):
+        _, mensagens = self.conferir([boot(), status(1, 0)])
+        self.assertIn("-- imu: FALHA", mensagens)
+
+
 class TestEnmoldurar(unittest.TestCase):
     def test_exemplos_da_proposta(self):
         self.assertEqual(b"$H,1793980812437*52\n", enmoldurar("H,1793980812437"))
@@ -139,7 +222,9 @@ class TestConferenciaDaHora(unittest.TestCase):
         c = Conferencia()
         c.linha(boot(), HORA)
         c.linha(ativo(1, 1, HORA - 20), HORA)
-        c.linha(ativo(2, 2, HORA + 980), HORA + 1000)
+        for seq in range(2, 52):  # os 50 $A do segundo
+            c.linha(acel(seq, t=HORA + 500), HORA + 500)
+        c.linha(ativo(52, 2, HORA + 980), HORA + 1000)
         c.terminar()
         self.assertEqual(0, c.fora_da_hora)
         self.assertEqual(-20, c.maior_distancia_ms)

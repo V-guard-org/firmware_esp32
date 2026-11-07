@@ -1,12 +1,14 @@
 // Firmware do ESP32 do V-GUARD (proposta §4). Por enquanto, ele se apresenta pela USB ($B ao
-// ligar e um $S por segundo, #2) e obedece à Pi: o $H o põe em ATIVO e o $C,obd_hz muda a taxa
-// do OBD (#3). O OBD, o acelerômetro e o SD vêm nos tickets seguintes.
+// ligar e um $S por segundo, #2), obedece à Pi (o $H o põe em ATIVO e o $C,obd_hz muda a taxa
+// do OBD, #3) e, em ATIVO, manda o acelerômetro a 50 Hz ($A, #4). O OBD e o SD vêm nos tickets
+// seguintes.
 #include <Arduino.h>
 #include <esp_log.h>
 #include <esp_system.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
+#include "aquisicao.h"
 #include "config.h"
 #include "protocolo.h"
 #include "serial_pi.h"
@@ -15,7 +17,6 @@ static_assert(__cplusplus >= 201703L, "o firmware usa C++17 (proposta §4.8)");
 
 namespace {
 
-using vguard::protocolo::EstadoImu;
 using vguard::protocolo::EstadoObd;
 using vguard::protocolo::EstadoSd;
 using vguard::protocolo::MotivoReset;
@@ -42,7 +43,7 @@ Status status_atual(uint32_t uptime_s) {
   Status status{};
   status.uptime_s = uptime_s;
   status.obd = EstadoObd::parado;
-  status.imu = EstadoImu::falha;
+  status.imu = vguard::aquisicao::estado_imu();
   status.sd = EstadoSd::ausente;
   status.sd_livre = 0;
   return status;
@@ -59,8 +60,11 @@ void setup() {
   // Na USB, só as linhas do protocolo: um aviso do ESP-IDF no meio de uma linha a corromperia.
   esp_log_level_set("*", ESP_LOG_NONE);
   vguard::serial_pi::iniciar();
+  // A conferência de 1 g vem antes do $B (~0,15 s), para o primeiro $S já sair com o imu certo.
+  vguard::aquisicao::preparar();
   vguard::serial_pi::emitir_boot(motivo_do_reset());
   vguard::serial_pi::emitir_status(status_atual(uptime_s));
+  vguard::aquisicao::iniciar();
 }
 
 void loop() {

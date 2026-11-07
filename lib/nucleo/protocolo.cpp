@@ -224,6 +224,12 @@ void Emissor::emitir_log(uint64_t t, Nivel nivel, const char *texto) {
   emitir(linha);
 }
 
+void Emissor::emitir_acelerometro(uint64_t t, int32_t ax, int32_t ay, int32_t az) {
+  Linha linha = comecar('A', t);
+  linha.campo_decimal(ax, 2).campo_decimal(ay, 2).campo_decimal(az, 2);
+  emitir(linha);
+}
+
 namespace {
 
 bool hexa_maiusculo(char caractere, uint8_t &valor) {
