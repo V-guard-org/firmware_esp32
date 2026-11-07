@@ -1,6 +1,7 @@
 #include "serial_pi.h"
 
 #include <Arduino.h>
+#include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 #include <freertos/stream_buffer.h>
@@ -15,6 +16,7 @@ namespace vguard::serial_pi {
 namespace {
 
 StreamBufferHandle_t saida = nullptr;
+// Protege o Emissor, o relógio e a taxa do OBD, que as tarefas dividem.
 SemaphoreHandle_t trava = nullptr;
 
 // O buffer na RAM, visto pelo Emissor do núcleo como o destino das linhas.
@@ -32,9 +34,17 @@ class BufferDeSaida final : public protocolo::Destino {
 
 BufferDeSaida buffer_de_saida;
 protocolo::Emissor emissor(buffer_de_saida);
+protocolo::Relogio relogio;
+uint16_t obd_hz_decimos = config::obd_hz_inicial_decimos;
+// Só a tarefa de leitura usa.
+protocolo::Leitor leitor;
 
-// Segura a trava do Emissor até o fim do bloco. A espera é só pela outra tarefa que estiver
-// emitindo, e isso leva microssegundos: montar a linha e copiá-la para o buffer.
+// Tempo desde o boot, em ms. O contador do esp_timer tem 64 bits e não dá a volta.
+uint64_t agora_ms() { return static_cast<uint64_t>(esp_timer_get_time()) / 1000; }
+
+// Segura a trava até o fim do bloco. A espera é só pela outra tarefa que estiver emitindo ou
+// aplicando um comando da Pi, e isso leva microssegundos: montar a linha e copiá-la para o
+// buffer, ou trocar dois números.
 class ComTrava {
  public:
   ComTrava() { xSemaphoreTake(trava, portMAX_DELAY); }
@@ -49,6 +59,22 @@ void tarefa_escrita(void *) {
   for (;;) {
     const size_t quantidade = xStreamBufferReceive(saida, bloco, sizeof(bloco), portMAX_DELAY);
     Serial.write(bloco, quantidade);
+  }
+}
+
+void aplicar(const protocolo::Comando &comando);
+
+// Lê o que a Pi manda. Os comandos chegam raramente (o $H a cada 60 s); ler a cada poucos ms
+// basta e quase não soma atraso ao $H.
+void tarefa_leitura(void *) {
+  for (;;) {
+    int caractere;
+    while ((caractere = Serial.read()) >= 0) {
+      if (leitor.receber(static_cast<char>(caractere))) {
+        aplicar(protocolo::interpretar(leitor.tipo(), leitor.campos()));
+      }
+    }
+    vTaskDelay(pdMS_TO_TICKS(config::serial_periodo_leitura_ms));
   }
 }
 
@@ -67,16 +93,57 @@ void iniciar() {
                               tskNO_AFFINITY) != pdPASS) {
     abort();
   }
+  if (xTaskCreatePinnedToCore(tarefa_leitura, "serial_pi_leitura", config::serial_pilha_leitura,
+                              nullptr, config::serial_prioridade_leitura, nullptr,
+                              tskNO_AFFINITY) != pdPASS) {
+    abort();
+  }
 }
 
-void emitir_boot(uint64_t t, protocolo::MotivoReset motivo) {
+void emitir_boot(protocolo::MotivoReset motivo) {
   ComTrava com_trava;
-  emissor.emitir_boot(t, versao_firmware, motivo);
+  emissor.emitir_boot(relogio.t(agora_ms()), versao_firmware, motivo);
 }
 
-void emitir_status(uint64_t t, const protocolo::Status &status) {
+void emitir_status(protocolo::Status status) {
   ComTrava com_trava;
-  emissor.emitir_status(t, status);
+  // Com a trava, o estado e o t saem da mesma leitura do relógio: nunca ESPERA com t.
+  status.estado = relogio.acertado() ? protocolo::Estado::ativo : protocolo::Estado::espera;
+  status.obd_hz_decimos = obd_hz_decimos;
+  emissor.emitir_status(relogio.t(agora_ms()), status);
 }
+
+void emitir_log(protocolo::Nivel nivel, const char *texto) {
+  ComTrava com_trava;
+  emissor.emitir_log(relogio.t(agora_ms()), nivel, texto);
+}
+
+namespace {
+
+void aplicar(const protocolo::Comando &comando) {
+  using Tipo = protocolo::Comando::Tipo;
+  switch (comando.tipo) {
+    case Tipo::hora: {
+      ComTrava com_trava;
+      relogio.acertar(comando.unix_ms, agora_ms());
+      break;
+    }
+    case Tipo::hora_invalida:
+      emitir_log(protocolo::Nivel::aviso, "H invalido");
+      break;
+    case Tipo::taxa_obd: {
+      ComTrava com_trava;
+      obd_hz_decimos = comando.obd_hz_decimos;
+      break;
+    }
+    case Tipo::taxa_invalida:
+      emitir_log(protocolo::Nivel::aviso, "C invalido");
+      break;
+    case Tipo::nenhum:
+      break;
+  }
+}
+
+}  // namespace
 
 }  // namespace vguard::serial_pi

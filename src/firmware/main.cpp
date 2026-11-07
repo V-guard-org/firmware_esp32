@@ -1,5 +1,6 @@
-// Firmware do ESP32 do V-GUARD (proposta §4). Por enquanto, ele se apresenta pela USB: $B ao
-// ligar e um $S por segundo, sempre em ESPERA (#2). A hora pelo $H vem no #3.
+// Firmware do ESP32 do V-GUARD (proposta §4). Por enquanto, ele se apresenta pela USB ($B ao
+// ligar e um $S por segundo, #2) e obedece à Pi: o $H o põe em ATIVO e o $C,obd_hz muda a taxa
+// do OBD (#3). O OBD, o acelerômetro e o SD vêm nos tickets seguintes.
 #include <Arduino.h>
 #include <esp_log.h>
 #include <esp_system.h>
@@ -14,15 +15,11 @@ static_assert(__cplusplus >= 201703L, "o firmware usa C++17 (proposta §4.8)");
 
 namespace {
 
-using vguard::protocolo::Estado;
 using vguard::protocolo::EstadoImu;
 using vguard::protocolo::EstadoObd;
 using vguard::protocolo::EstadoSd;
 using vguard::protocolo::MotivoReset;
 using vguard::protocolo::Status;
-
-// Sem a hora da Pi, o t vale 0 (proposta §5.2).
-constexpr uint64_t sem_hora = 0;
 
 // O motivo que o ESP32 informa, nos nomes do $B (proposta §5.3).
 MotivoReset motivo_do_reset() {
@@ -40,15 +37,14 @@ MotivoReset motivo_do_reset() {
 }
 
 // As peças que ainda não existem saem com valores que não fingem funcionar (proposta §4.8).
+// O estado e o obd_hz, a serial_pi preenche com o $H e o $C recebidos.
 Status status_atual(uint32_t uptime_s) {
   Status status{};
   status.uptime_s = uptime_s;
-  status.estado = Estado::espera;
   status.obd = EstadoObd::parado;
   status.imu = EstadoImu::falha;
   status.sd = EstadoSd::ausente;
   status.sd_livre = 0;
-  status.obd_hz_decimos = vguard::config::obd_hz_inicial_decimos;
   return status;
 }
 
@@ -63,12 +59,12 @@ void setup() {
   // Na USB, só as linhas do protocolo: um aviso do ESP-IDF no meio de uma linha a corromperia.
   esp_log_level_set("*", ESP_LOG_NONE);
   vguard::serial_pi::iniciar();
-  vguard::serial_pi::emitir_boot(sem_hora, motivo_do_reset());
-  vguard::serial_pi::emitir_status(sem_hora, status_atual(uptime_s));
+  vguard::serial_pi::emitir_boot(motivo_do_reset());
+  vguard::serial_pi::emitir_status(status_atual(uptime_s));
 }
 
 void loop() {
   vTaskDelayUntil(&ultimo_status, pdMS_TO_TICKS(vguard::config::periodo_status_ms));
   ++uptime_s;
-  vguard::serial_pi::emitir_status(sem_hora, status_atual(uptime_s));
+  vguard::serial_pi::emitir_status(status_atual(uptime_s));
 }

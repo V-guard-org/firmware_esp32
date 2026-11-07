@@ -3,23 +3,36 @@
 # dependencies = ["pyserial==3.5"]
 # ///
 """Ferramenta de bancada (proposta §4.8): lê a USB do ESP32 no notebook, confere cada linha do
-protocolo (proposta §5) e mostra o resumo.
+protocolo (proposta §5), faz o papel da Pi e mostra o resumo.
 
     uv run ferramentas/bancada.py                  mostra as linhas até o Ctrl+C
     uv run ferramentas/bancada.py --segundos 300   captura 5 min e sai com erro se houver problema
     uv run ferramentas/bancada.py --porta /dev/ttyUSB0 --reiniciar
+    uv run ferramentas/bancada.py --segundos 8 --enviar C,obd_hz,15 --enviar C,obd_hz,25
 
 Sem o uv: `pip install pyserial==3.5` e `python ferramentas/bancada.py`.
 
 Sem --porta, procura a placa pelo chip USB (CP210x ou CH340/CH9102). Com --segundos, só mostra
-os problemas e as linhas raras ($B, $L, $P); o código de saída é 1 se houve linha corrompida,
-lacuna na seq ou nenhuma linha válida.
+os problemas, o que foi mandado ao ESP32 e as linhas raras ($B, $L, $P); o código de saída é 1
+se houve algum dos problemas abaixo ou nenhuma linha válida.
+
+O papel da Pi (proposta §5.5):
+- manda o $H com a hora do notebook ao ver um $B ou um $S com ESPERA, e depois a cada 60 s. A
+  primeira linha válida também dispara um, para o relógio do ESP32 que já estava em ATIVO.
+  --sem-hora não manda, para ver o ESP32 em ESPERA;
+- o que se digita no terminal, seguido de Enter, vai ao ESP32 com a moldura: C,obd_hz,15 sai
+  como $C,obd_hz,15*hh. A linha que começa com $ vai como foi digitada;
+- --enviar <linha>, repetível, manda cada linha com 2 s de intervalo, a partir da primeira linha
+  válida.
 
 O que conta como problema:
 - corrompida: mais de 120 caracteres (sem o \\r\\n), sem $, sem *hh, com checksum errado ou sem
   a seq no primeiro campo;
 - perdida: cada número que falta na seq;
-- fora de ordem: a seq andou para trás sem voltar a 0.
+- fora de ordem: a seq andou para trás sem voltar a 0;
+- fora da hora: o t da linha a mais de 1 s da hora do notebook na chegada (o t 0, sem hora, não
+  conta);
+- continua em ESPERA: um $S com ESPERA mais de 3 s depois de um $H mandado pela ferramenta.
 
 A seq voltar a 0 é reinício do ESP32, não lacuna. O texto que a ROM imprime no boot, e a linha
 cortada pelo reinício, chegam antes do $B com seq 0 e são ignorados sem contar como corrompidos.
@@ -28,7 +41,9 @@ meio de uma linha).
 """
 import argparse
 import dataclasses
+import queue
 import sys
+import threading
 import time
 
 BAUD = 115200
@@ -37,6 +52,10 @@ TAMANHO_MAXIMO = 120
 VIDS_DA_PLACA = {0x10C4: "CP210x", 0x1A86: "WCH"}
 # Linhas raras, que aparecem também no modo com tempo.
 TIPOS_RAROS = {"B", "L", "P"}
+# O t pode estar até 1 s da hora do notebook (critério do #3).
+DISTANCIA_MAXIMA_MS = 1000
+# Depois de um $H, o ESP32 tem até 3 s para o $S sair de ESPERA.
+PRAZO_PARA_ATIVO_MS = 3000
 
 
 def checksum(texto: bytes) -> int:
@@ -45,6 +64,16 @@ def checksum(texto: bytes) -> int:
     for byte in texto:
         resultado ^= byte
     return resultado
+
+
+def enmoldurar(texto: str) -> bytes:
+    """Põe a moldura numa linha para o ESP32: "C,obd_hz,15" vira b"$C,obd_hz,15*63\\n". A que já
+    começa com $ vai como está, para testar uma moldura errada."""
+    texto = texto.strip()
+    if texto.startswith("$"):
+        return texto.encode() + b"\n"
+    corpo = texto.encode()
+    return b"$" + corpo + f"*{checksum(corpo):02X}\n".encode()
 
 
 @dataclasses.dataclass
@@ -89,18 +118,38 @@ class Conferencia:
         self.ignoradas = 0
         self.por_tipo: dict[str, int] = {}
         self.saltos_uptime = 0
+        self.horas_enviadas = 0
+        self.fora_da_hora = 0
+        self.esperas = 0
+        # Maior distância entre o t e a hora do notebook, em ms, com o sinal.
+        self.maior_distancia_ms: int | None = None
+        # A última linha válida, ou None se a última foi recusada.
+        self.ultima: Valida | None = None
         self._ultima_seq: int | None = None
+        self._fora_da_hora_agora = False
+        self._hora_enviada_em: int | None = None
+        self._avisou_espera = False
         self._ultimo_uptime: int | None = None
         # Linhas recusadas esperando a próxima válida: se ela for um reinício (seq 0), eram o
         # boot; se não, eram corrompidas.
         self._pendentes: list[tuple[bytes, str]] = []
 
-    def linha(self, bruta: bytes) -> list[str]:
+    def linha(self, bruta: bytes, hora_ms: int | None = None) -> list[str]:
+        """Confere uma linha. Com hora_ms (a hora do notebook na chegada), confere também o t e a
+        saída de ESPERA."""
         resultado = ler_linha(bruta)
         if isinstance(resultado, str):
+            self.ultima = None
             self._pendentes.append((bruta, resultado))
             return []
-        return self._valida(resultado, bruta)
+        self.ultima = resultado
+        return self._valida(resultado, bruta, hora_ms)
+
+    def hora_enviada(self, hora_ms: int) -> None:
+        """A ferramenta mandou um $H: o ESP32 tem 3 s para o $S sair de ESPERA."""
+        self.horas_enviadas += 1
+        self._hora_enviada_em = hora_ms
+        self._avisou_espera = False
 
     def terminar(self) -> list[str]:
         """No fim da captura, as recusadas sem uma válida depois contam como corrompidas, a não
@@ -119,13 +168,19 @@ class Conferencia:
             f"  reinícios do ESP32: {self.reinicios}",
             f"  texto fora do protocolo (boot): {self.ignoradas}",
             f"  saltos no uptime_s do $S: {self.saltos_uptime}",
+            f"  $H enviados: {self.horas_enviadas}",
+            "  maior distância entre o t e o notebook: " + (
+                "nenhum t para comparar" if self.maior_distancia_ms is None
+                else f"{self.maior_distancia_ms:+d} ms"),
+            f"  linhas com o t a mais de 1 s do notebook: {self.fora_da_hora}",
+            f"  $S em ESPERA mais de 3 s depois do $H: {self.esperas}",
         ])
 
     def falhou(self) -> bool:
         return (self.corrompidas > 0 or self.perdidas > 0 or self.fora_de_ordem > 0
-                or self.validas == 0)
+                or self.fora_da_hora > 0 or self.esperas > 0 or self.validas == 0)
 
-    def _valida(self, linha: Valida, bruta: bytes) -> list[str]:
+    def _valida(self, linha: Valida, bruta: bytes, hora_ms: int | None) -> list[str]:
         mensagens = []
         reinicio = linha.seq == 0 and self._ultima_seq is not None and self._ultima_seq != 0xFFFFFFFF
         if self._ultima_seq is None or reinicio:
@@ -133,6 +188,9 @@ class Conferencia:
         else:
             mensagens += self._corromper_pendentes()
 
+        if reinicio or linha.tipo == "B":
+            # O ESP32 voltou a ESPERA; o $H mandado antes não vale mais.
+            self._hora_enviada_em = None
         if reinicio:
             self.reinicios += 1
             self._ultimo_uptime = None
@@ -157,8 +215,31 @@ class Conferencia:
                 self.saltos_uptime += 1
                 mensagens.append(f"!! uptime_s saltou de {self._ultimo_uptime} para {uptime}")
             self._ultimo_uptime = uptime
+        if hora_ms is not None:
+            mensagens += self._conferir_hora(linha, hora_ms)
         mensagens.append(bruta.decode("ascii", errors="replace").rstrip("\r"))
         return mensagens
+
+    def _conferir_hora(self, linha: Valida, hora_ms: int) -> list[str]:
+        mensagens = []
+        if len(linha.campos) > 2 and linha.campos[2].isdigit() and linha.campos[2] != "0":
+            distancia = int(linha.campos[2]) - hora_ms
+            if self.maior_distancia_ms is None or abs(distancia) > abs(self.maior_distancia_ms):
+                self.maior_distancia_ms = distancia
+            fora = abs(distancia) > DISTANCIA_MAXIMA_MS
+            if fora:
+                self.fora_da_hora += 1
+                if not self._fora_da_hora_agora:
+                    mensagens.append(f"!! t a {distancia:+d} ms da hora do notebook")
+            self._fora_da_hora_agora = fora
+        espera = linha.tipo == "S" and len(linha.campos) > 4 and linha.campos[4] == "ESPERA"
+        if (espera and self._hora_enviada_em is not None and not self._avisou_espera
+                and hora_ms - self._hora_enviada_em > PRAZO_PARA_ATIVO_MS):
+            self.esperas += 1
+            self._avisou_espera = True
+            mensagens.append("!! continua em ESPERA mais de 3 s depois do $H")
+        return mensagens
+
 
     def _ignorar_pendentes(self) -> list[str]:
         mensagens = [f"   (fora do protocolo) {mostrar(bruta)}" for bruta, _ in self._pendentes]
@@ -174,13 +255,66 @@ class Conferencia:
         return mensagens
 
 
+class PapelDaPi:
+    """Faz o papel da Pi (proposta §5.5): decide quando mandar o $H e as linhas do --enviar. Não
+    sabe nada da porta: recebe as linhas válidas e o tempo, e devolve o que mandar."""
+
+    INTERVALO_HORA = 60.0
+    # Depois de um $H, um $S com ESPERA só dispara outro passado este tempo: o $S que já estava
+    # a caminho não deve repetir o $H.
+    PAUSA_ENTRE_HORAS = 2.0
+    INTERVALO_ENVIAR = 2.0
+
+    def __init__(self, mandar_hora: bool = True, enviar: list[str] | tuple[str, ...] = ()):
+        self.mandar_hora = mandar_hora
+        self._enviar = list(enviar)
+        self._agenda: list[tuple[float, str]] = []
+        self._ultima_hora: float | None = None
+        self._viu_valida = False
+
+    def recebeu(self, linha: Valida, agora: float, hora_ms: int) -> list[bytes]:
+        """agora: o tempo monotônico, em s; hora_ms: a hora do notebook, em ms."""
+        if not self._viu_valida:
+            self._viu_valida = True
+            self._agenda = [(agora + self.INTERVALO_ENVIAR * (i + 1), texto)
+                            for i, texto in enumerate(self._enviar)]
+        if not self.mandar_hora:
+            return []
+        espera = linha.tipo == "S" and len(linha.campos) > 4 and linha.campos[4] == "ESPERA"
+        pausa_passou = (self._ultima_hora is None
+                        or agora - self._ultima_hora >= self.PAUSA_ENTRE_HORAS)
+        if linha.tipo == "B" or self._ultima_hora is None or (espera and pausa_passou):
+            return [self._hora(agora, hora_ms)]
+        return []
+
+    def tique(self, agora: float, hora_ms: int) -> list[bytes]:
+        """O $H de 60 em 60 s."""
+        if (self.mandar_hora and self._ultima_hora is not None
+                and agora - self._ultima_hora >= self.INTERVALO_HORA):
+            return [self._hora(agora, hora_ms)]
+        return []
+
+    def agendadas(self, agora: float) -> list[bytes]:
+        """As linhas do --enviar que chegaram na hora. São pedidas por quem usa e podem ser
+        inválidas de propósito, por isso ficam à parte do $H da ferramenta."""
+        envios = []
+        while self._agenda and self._agenda[0][0] <= agora:
+            envios.append(enmoldurar(self._agenda.pop(0)[1]))
+        return envios
+
+    def _hora(self, agora: float, hora_ms: int) -> bytes:
+        self._ultima_hora = agora
+        return enmoldurar(f"H,{hora_ms}")
+
+
 def mostrar(bruta: bytes) -> str:
     return bruta.decode("ascii", errors="backslashreplace").rstrip("\r")
 
 
 def rara_ou_problema(mensagem: str) -> bool:
-    """No modo com tempo, só aparecem os problemas, os reinícios e as linhas raras."""
-    if mensagem.startswith(("!!", "--")):
+    """No modo com tempo, só aparecem os problemas, os reinícios, o que foi mandado e as linhas
+    raras."""
+    if mensagem.startswith(("!!", "--", ">>")):
         return True
     return mensagem.startswith("$") and mensagem[1:2] in TIPOS_RAROS
 
@@ -205,6 +339,13 @@ def reiniciar_pelo_en(porta) -> None:
     porta.rts = False
 
 
+def ler_teclado(fila: queue.Queue) -> None:
+    """Põe na fila cada linha digitada no terminal."""
+    for texto in sys.stdin:
+        if texto.strip():
+            fila.put(texto)
+
+
 def main() -> int:
     argumentos = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     argumentos.add_argument("--porta", help="porta USB do ESP32 (sem ela, procura pelo chip)")
@@ -212,6 +353,11 @@ def main() -> int:
                             help="captura por N segundos, mostra o resumo e sai")
     argumentos.add_argument("--reiniciar", action="store_true",
                             help="reinicia o ESP32 pelo EN ao abrir a porta, para pegar o $B")
+    argumentos.add_argument("--sem-hora", action="store_true",
+                            help="não manda o $H, para ver o ESP32 em ESPERA")
+    argumentos.add_argument("--enviar", action="append", default=[], metavar="LINHA",
+                            help="manda a linha (C,obd_hz,15) com a moldura; repetível, com 2 s "
+                                 "de intervalo a partir da primeira linha válida")
     args = argumentos.parse_args()
 
     import serial
@@ -226,16 +372,40 @@ def main() -> int:
           (f" por {args.segundos:g} s" if args.segundos else ", Ctrl+C para sair") + ".")
 
     conferencia = Conferencia()
+    pi = PapelDaPi(mandar_hora=not args.sem_hora, enviar=args.enviar)
+    teclado: queue.Queue = queue.Queue()
+    threading.Thread(target=ler_teclado, args=(teclado,), daemon=True).start()
     resto = b""
     inicio = time.monotonic()
+
+    def mostrar_mensagens(mensagens: list[str]) -> None:
+        for mensagem in mensagens:
+            if args.segundos is None or rara_ou_problema(mensagem):
+                print(f"{time.monotonic() - inicio:9.3f}  {mensagem}")
+
+    def mandar(envios: list[bytes], hora_ms: int, da_ferramenta: bool = True) -> None:
+        for envio in envios:
+            porta.write(envio)
+            # Só o $H da própria ferramenta conta no prazo para sair de ESPERA: um digitado ou
+            # do --enviar pode ser inválido de propósito.
+            if da_ferramenta and envio.startswith(b"$H,"):
+                conferencia.hora_enviada(hora_ms)
+            mostrar_mensagens([">> " + envio.decode(errors="backslashreplace").rstrip()])
+
     try:
         while args.segundos is None or time.monotonic() - inicio < args.segundos:
             resto += porta.read(porta.in_waiting or 1)
             *linhas, resto = resto.split(b"\n")
+            agora = time.monotonic()
+            hora_ms = int(time.time() * 1000)
             for bruta in linhas:
-                for mensagem in conferencia.linha(bruta):
-                    if args.segundos is None or rara_ou_problema(mensagem):
-                        print(f"{time.monotonic() - inicio:9.3f}  {mensagem}")
+                mostrar_mensagens(conferencia.linha(bruta, hora_ms))
+                if conferencia.ultima is not None:
+                    mandar(pi.recebeu(conferencia.ultima, agora, hora_ms), hora_ms)
+            mandar(pi.tique(agora, hora_ms), hora_ms)
+            mandar(pi.agendadas(agora), hora_ms, da_ferramenta=False)
+            while not teclado.empty():
+                mandar([enmoldurar(teclado.get())], hora_ms, da_ferramenta=False)
     except KeyboardInterrupt:
         pass
     finally:

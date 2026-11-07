@@ -43,6 +43,11 @@ constexpr size_t serial_tamanho_saida = 2048;
 // A tarefa que passa o buffer para a UART: pilha em bytes e prioridade (acima do loop()).
 constexpr uint32_t serial_pilha_escrita = 3072;
 constexpr unsigned serial_prioridade_escrita = 2;
+// A tarefa que lê as linhas da Pi ($H e $C): pilha, prioridade (a do loop()) e intervalo entre
+// as leituras. Os 10 ms entram no máximo uma vez no erro da hora.
+constexpr uint32_t serial_pilha_leitura = 3072;
+constexpr unsigned serial_prioridade_leitura = 1;
+constexpr uint32_t serial_periodo_leitura_ms = 10;
 
 // Taxa do OBD ao ligar, em décimos de pedido por segundo: 12,5 (proposta §4.3).
 constexpr uint16_t obd_hz_inicial_decimos = 125;

@@ -56,13 +56,15 @@ void Linha::acrescentar_digitos(uint64_t valor, uint8_t minimo) {
   }
 }
 
-Linha &Linha::campo_texto(const char *texto) {
+Linha &Linha::campo_texto(const char *texto) { return campo_texto(texto, tamanho_maximo); }
+
+Linha &Linha::campo_texto(const char *texto, size_t maximo) {
   virgula();
   if (texto == nullptr) {
     valida_ = false;
     return *this;
   }
-  for (const char *c = texto; *c != '\0'; ++c) {
+  for (const char *c = texto; *c != '\0' && static_cast<size_t>(c - texto) < maximo; ++c) {
     if (*c == '$' || *c == '*' || *c == '\n' || *c == '\r') {
       valida_ = false;
       return *this;
@@ -170,6 +172,14 @@ const char *nome(EstadoSd sd) {
   return "?";
 }
 
+const char *nome(Nivel nivel) {
+  switch (nivel) {
+    case Nivel::aviso: return "AVISO";
+    case Nivel::erro: return "ERRO";
+  }
+  return "?";
+}
+
 Linha Emissor::comecar(char tipo, uint64_t t) {
   Linha linha(tipo);
   linha.campo_inteiro(proxima_seq_++).campo_inteiro(t);
@@ -206,6 +216,161 @@ void Emissor::emitir_status(uint64_t t, const Status &status) {
   }
   linha.campo_inteiro(descartadas_);
   emitir(linha);
+}
+
+void Emissor::emitir_log(uint64_t t, Nivel nivel, const char *texto) {
+  Linha linha = comecar('L', t);
+  linha.campo_texto(nome(nivel)).campo_texto(texto, tamanho_maximo_texto_log);
+  emitir(linha);
+}
+
+namespace {
+
+bool hexa_maiusculo(char caractere, uint8_t &valor) {
+  if (caractere >= '0' && caractere <= '9') {
+    valor = static_cast<uint8_t>(caractere - '0');
+    return true;
+  }
+  if (caractere >= 'A' && caractere <= 'F') {
+    valor = static_cast<uint8_t>(caractere - 'A' + 10);
+    return true;
+  }
+  return false;
+}
+
+bool digito(char caractere) { return caractere >= '0' && caractere <= '9'; }
+
+// Lê um inteiro sem sinal só com dígitos, de 1 a 19 (até 10^19 − 1, que cabe em 64 bits).
+bool ler_inteiro(const char *texto, uint64_t &valor) {
+  constexpr size_t maximo_digitos = 19;
+  valor = 0;
+  size_t quantidade = 0;
+  for (const char *c = texto; *c != '\0'; ++c) {
+    if (!digito(*c) || ++quantidade > maximo_digitos) {
+      return false;
+    }
+    valor = valor * 10 + static_cast<uint64_t>(*c - '0');
+  }
+  return quantidade > 0;
+}
+
+// $H,<unix_ms>
+Comando interpretar_hora(const char *campos) {
+  Comando comando;
+  uint64_t unix_ms = 0;
+  if (ler_inteiro(campos, unix_ms) && unix_ms >= hora_minima_ms) {
+    comando.tipo = Comando::Tipo::hora;
+    comando.unix_ms = unix_ms;
+  } else {
+    comando.tipo = Comando::Tipo::hora_invalida;
+  }
+  return comando;
+}
+
+// $C,obd_hz,<n>: n com 1 ou 2 dígitos inteiros e, se tiver ponto, exatamente 1 casa.
+Comando interpretar_configuracao(const char *campos) {
+  constexpr char parametro[] = "obd_hz,";
+  constexpr size_t tamanho_parametro = sizeof(parametro) - 1;
+  constexpr uint16_t minimo_decimos = 10;   // 1 pedido por segundo
+  constexpr uint16_t maximo_decimos = 200;  // 20 pedidos por segundo
+
+  Comando comando;
+  comando.tipo = Comando::Tipo::taxa_invalida;
+  for (size_t i = 0; i < tamanho_parametro; ++i) {
+    if (campos[i] != parametro[i]) {
+      return comando;
+    }
+  }
+  const char *c = campos + tamanho_parametro;
+  uint16_t decimos = 0;
+  size_t inteiros = 0;
+  for (; digito(*c); ++c) {
+    if (++inteiros > 2) {
+      return comando;
+    }
+    decimos = static_cast<uint16_t>(decimos * 10 + (*c - '0'));
+  }
+  if (inteiros == 0) {
+    return comando;
+  }
+  decimos = static_cast<uint16_t>(decimos * 10);
+  if (*c == '.') {
+    if (!digito(c[1]) || c[2] != '\0') {
+      return comando;
+    }
+    decimos = static_cast<uint16_t>(decimos + (c[1] - '0'));
+  } else if (*c != '\0') {
+    return comando;
+  }
+  if (decimos < minimo_decimos || decimos > maximo_decimos) {
+    return comando;
+  }
+  comando.tipo = Comando::Tipo::taxa_obd;
+  comando.obd_hz_decimos = decimos;
+  return comando;
+}
+
+}  // namespace
+
+bool Leitor::receber(char caractere) {
+  if (caractere == '\n') {
+    const bool aceita = !descartando_ && aceitar();
+    tamanho_ = 0;
+    descartando_ = false;
+    return aceita;
+  }
+  if (descartando_) {
+    return false;
+  }
+  // Cabem os 120 caracteres e um \r; o \0 marcaria o fim do texto antes da hora.
+  if (caractere == '\0' || tamanho_ >= tamanho_maximo + 1) {
+    descartando_ = true;
+    return false;
+  }
+  buffer_[tamanho_++] = caractere;
+  return false;
+}
+
+bool Leitor::aceitar() {
+  size_t tamanho = tamanho_;
+  if (tamanho > 0 && buffer_[tamanho - 1] == '\r') {
+    --tamanho;
+  }
+  // O menor é "$X*hh".
+  if (tamanho < 5 || tamanho > tamanho_maximo || buffer_[0] != '$') {
+    return false;
+  }
+  const size_t asterisco = tamanho - 3;
+  uint8_t alto = 0;
+  uint8_t baixo = 0;
+  if (buffer_[asterisco] != '*' || !hexa_maiusculo(buffer_[asterisco + 1], alto) ||
+      !hexa_maiusculo(buffer_[asterisco + 2], baixo)) {
+    return false;
+  }
+  if (checksum(buffer_ + 1, asterisco - 1) != static_cast<uint8_t>((alto << 4) | baixo)) {
+    return false;
+  }
+  // Depois do tipo, ou vêm os campos, depois de uma vírgula, ou já vem o *.
+  if (asterisco == 2) {
+    inicio_campos_ = 2;
+  } else if (buffer_[2] == ',') {
+    inicio_campos_ = 3;
+  } else {
+    return false;
+  }
+  if (buffer_[1] == '*' || buffer_[1] == ',') {
+    return false;
+  }
+  buffer_[asterisco] = '\0';
+  return true;
+}
+
+Comando interpretar(char tipo, const char *campos) {
+  switch (tipo) {
+    case 'H': return interpretar_hora(campos);
+    case 'C': return interpretar_configuracao(campos);
+    default: return Comando{};
+  }
 }
 
 }  // namespace vguard::protocolo
