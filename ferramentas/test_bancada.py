@@ -223,7 +223,7 @@ class TestConferenciaDoAcelerometro(unittest.TestCase):
 
 
 class TestMudancaDoObd(unittest.TestCase):
-    """A mudança do obd do $S, para ver o OBD parar e voltar (#7)."""
+    """A mudança do obd do $S, para os cenários do simulador (#7)."""
 
     def test_mostra_cada_mudanca_uma_vez(self):
         conferencia = Conferencia(conferir_taxa_do_a=False)

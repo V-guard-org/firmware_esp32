@@ -310,7 +310,7 @@ class Conferencia:
         return mensagens
 
     def _status_do_obd(self, linha: Valida) -> list[str]:
-        """No $S: a mudança do obd (LENDO → SEM_RESPOSTA etc.), para ver o OBD parar e voltar."""
+        """No $S: a mudança do obd (LENDO → SEM_RESPOSTA etc.), para os cenários do simulador."""
         obd = linha.campos[5]
         if obd == self._ultimo_obd:
             return []
