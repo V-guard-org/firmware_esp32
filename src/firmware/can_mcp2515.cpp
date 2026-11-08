@@ -1,4 +1,4 @@
-#include "can_mcp2515.h"
+#include "can.h"
 
 #include <Arduino.h>
 #include <SPI.h>
@@ -8,7 +8,7 @@
 
 #include "config.h"
 
-namespace vguard::can_mcp2515 {
+namespace vguard::can {
 
 namespace {
 
@@ -75,4 +75,4 @@ bool erro_no_barramento() {
   return (controlador.getError() & (MCP_EFLG_TXBO | MCP_EFLG_TXEP | MCP_EFLG_RXEP)) != 0;
 }
 
-}  // namespace vguard::can_mcp2515
+}  // namespace vguard::can
