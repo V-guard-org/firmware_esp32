@@ -7,8 +7,8 @@
 #include <atomic>
 #include <cstdlib>
 
-#include "adxl345.h"
-#include "can_mcp2515.h"
+#include "acelerometro.h"
+#include "can.h"
 #include "config.h"
 #include "imu.h"
 #include "obd.h"
@@ -39,6 +39,7 @@ std::atomic<bool> dentro_da_faixa{false};
 bool conferencia_feita = false;
 imu::Tratamento tratamento;
 bool avisou_calibracao = false;
+bool avisou_simulado = false;
 TickType_t ultima_tentativa = 0;
 
 // As 10 leituras da conferência de 1 g, uma a cada 10 ms. Devolve false se o sensor falhou no
@@ -50,7 +51,7 @@ bool conferir() {
     if (i > 0) {
       vTaskDelay(ticks(config::aquisicao_periodo_ms));
     }
-    if (!adxl345::ler(leituras[i])) {
+    if (!acelerometro::ler(leituras[i])) {
       return false;
     }
   }
@@ -62,7 +63,7 @@ bool conferir() {
 // Destrava o barramento e inicia o sensor. Faz a conferência se ela ainda não foi feita, e o
 // filtro recomeça na próxima leitura. Devolve false se o sensor não respondeu.
 bool religar() {
-  if (!adxl345::iniciar()) {
+  if (!acelerometro::iniciar()) {
     return false;
   }
   if (!conferencia_feita && !conferir()) {
@@ -75,6 +76,11 @@ bool religar() {
 // Um ciclo do acelerômetro em ATIVO. Devolve true se ele demorou (uma tentativa ou um
 // destravamento): o ritmo recomeça dali, em vez de correr atrás das leituras perdidas.
 bool ciclo_do_imu() {
+  // No esp32-sim sem o sensor, as leituras são as do simulado (#19).
+  if (!avisou_simulado && acelerometro::simulado()) {
+    serial_pi::emitir_log(Nivel::aviso, "IMU simulado");
+    avisou_simulado = true;
+  }
   if (!avisou_calibracao) {
     serial_pi::emitir_log(Nivel::aviso, "IMU sem calibracao");
     avisou_calibracao = true;
@@ -92,7 +98,7 @@ bool ciclo_do_imu() {
     return true;
   }
   imu::Leitura leitura;
-  if (!adxl345::ler(leitura)) {
+  if (!acelerometro::ler(leitura)) {
     // Erro de leitura: destrava e inicia de novo, na hora. Se voltar, só se perdem estas
     // leituras, sem aviso.
     if (!religar()) {
@@ -115,18 +121,18 @@ bool ciclo_do_imu() {
 // O MCP2515: ainda não iniciado (ESPERA), iniciado ou sem resposta. Sem resposta, fica assim até
 // o próximo boot (obd FALHA).
 enum class Can : uint8_t { nao_iniciado, pronto, falhou };
-Can can = Can::nao_iniciado;
+Can estado_can = Can::nao_iniciado;
 // O obd do $S, lido pelo loop().
 std::atomic<EstadoObd> obd_no_status{EstadoObd::parado};
 
 // O que a máquina do OBD pede: o MCP2515 e a serial.
 class SaidaDoObd final : public obd::Saida {
  public:
-  bool configurar_leitura() override { return can_mcp2515::configurar_leitura(); }
-  bool voltar_a_escutar() override { return can_mcp2515::iniciar_escuta(); }
+  bool configurar_leitura() override { return can::configurar_leitura(); }
+  bool voltar_a_escutar() override { return can::iniciar_escuta(); }
   void enviar(uint16_t id, const uint8_t (&dados)[8]) override {
     // O quadro que não saiu fica sem resposta, e o tempo limite cuida dele.
-    can_mcp2515::enviar(id, dados);
+    can::enviar(id, dados);
   }
   void emitir_obd(const char *campo, int64_t valor_escalado, uint8_t casas) override {
     serial_pi::emitir_obd(campo, valor_escalado, casas);
@@ -144,29 +150,29 @@ obd::Maquina maquina(saida_do_obd);
 // máquina, confere os erros do CAN enquanto ela pede e chama o tique.
 void ciclo_do_obd() {
   const uint32_t agora = agora_ms();
-  if (can == Can::nao_iniciado) {
-    if (can_mcp2515::iniciar_escuta()) {
-      can = Can::pronto;
+  if (estado_can == Can::nao_iniciado) {
+    if (can::iniciar_escuta()) {
+      estado_can = Can::pronto;
       maquina.comecar(agora);
     } else {
-      can = Can::falhou;
+      estado_can = Can::falhou;
     }
   }
-  if (can == Can::pronto) {
+  if (estado_can == Can::pronto) {
     obd::Quadro quadro;
-    for (uint32_t n = 0; n < config::obd_quadros_por_ciclo && can_mcp2515::receber(quadro); ++n) {
+    for (uint32_t n = 0; n < config::obd_quadros_por_ciclo && can::receber(quadro); ++n) {
       maquina.receber(quadro, agora);
     }
-    if (maquina.pedindo() && can_mcp2515::erro_no_barramento()) {
+    if (maquina.pedindo() && can::erro_no_barramento()) {
       maquina.erro_no_can(agora);
     }
     maquina.tique(agora, serial_pi::obd_hz_decimos());
     // O MCP2515 não voltou a só escuta: para de falar com ele.
     if (maquina.estado() == EstadoObd::falha) {
-      can = Can::falhou;
+      estado_can = Can::falhou;
     }
   }
-  obd_no_status = can == Can::pronto ? maquina.estado() : EstadoObd::falha;
+  obd_no_status = estado_can == Can::pronto ? maquina.estado() : EstadoObd::falha;
 }
 
 void tarefa(void *) {
@@ -191,9 +197,9 @@ void tarefa(void *) {
 }  // namespace
 
 void preparar() {
-  can_mcp2515::preparar();
+  can::preparar();
   tratamento.definir_offset(offset);
-  adxl345::instalar();
+  acelerometro::instalar();
   respondendo = religar();
 }
 

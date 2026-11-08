@@ -1,6 +1,5 @@
 // Configuração do firmware: pinos (proposta §4.6), endereço do ADXL345, versão (§4.8), taxas,
 // tempos e tamanhos.
-// O simulador também inclui este arquivo, para usar os mesmos pinos do MCP2515.
 #pragma once
 
 #include <cstddef>

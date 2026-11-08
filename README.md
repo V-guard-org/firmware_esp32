@@ -14,7 +14,7 @@ Placa: ESP32 clássico de 30 pinos, do tipo DevKit V1 (`board = esp32dev`).
 | microSD | 2º SPI (HSPI) | SCK 27, MISO 32, MOSI 33, CS 26 |
 | ADXL345 | I²C, endereço 0x53 | SDA 21, SCL 22 |
 
-O simulador usa os mesmos pinos do MCP2515. No código, os pinos estão em `src/firmware/config.h`.
+No código, os pinos estão em `src/firmware/config.h`.
 
 ## Compilar, gravar e testar
 
@@ -23,22 +23,12 @@ Precisa do [PlatformIO](https://platformio.org/), pela extensão do VS Code ou p
 | Ambiente | O que é | Comando |
 |---|---|---|
 | `esp32` | O firmware | `pio run -e esp32 -t upload` |
-| `simulador` | A ECU simulada, num 2º ESP32 com outro MCP2515 | `pio run -e simulador -t upload` |
+| `esp32-sim` | O firmware com a central simulada no lugar do MCP2515 (abaixo) | `pio run -e esp32-sim -t upload` |
 | `native` | Os testes do núcleo, no notebook | `pio test -e native` |
 
 Para conferir as regras do núcleo (`CODING_STANDARDS.md`): `python ferramentas/checa_nucleo.py`.
 
-O simulador escreve na USB dele, em texto livre, o cenário em uso e um resumo a cada 5 s (pedidos, respondidos, respostas negativas e erros de envio). Para ver: `pio device monitor`, com a USB do simulador. Uma letra digitada ali troca o cenário, e o simulador confirma:
-
-| Letra | Cenário |
-|---|---|
-| `n` | Normal |
-| `s` | PID 0F sem resposta |
-| `a` | PID 0F com "aguarde" (`03 7F 01 78`), e a resposta 400 ms depois do pedido |
-| `r` | PID 0F recusado (`03 7F 01 31`) |
-| `m` | Central muda: o tráfego de fundo continua, e nenhum pedido é respondido |
-| `d` | Carro desligado: tudo em silêncio, e o MCP2515 do simulador só escuta, sem confirmar (ACK) os pedidos |
-| `2` | Segunda central em 0x7E9, respondendo junto com valores FF, que o firmware deve ignorar |
+O `esp32-sim` é o mesmo firmware com uma central simulada no lugar do MCP2515, para a bancada sem o carro. A máquina do OBD é a mesma: descobre os PIDs (`$P` com `183A8001,00000001,40000000`) e pede os 8 em rodízio. Os valores seguem uma viagem que se repete a cada 5 min: parado em marcha lenta, acelera até 80 km/h, cruzeiro, freia e para. A temperatura do motor sobe de 47 °C a 90 °C nos primeiros 10 min. A versão termina em `-sim` no `$B` e no cabeçalho do SD, para os dados simulados não se confundirem com os do carro. Não precisa do MCP2515 ligado.
 
 ## Ferramenta de bancada
 

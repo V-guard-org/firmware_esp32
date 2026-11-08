@@ -1,5 +1,6 @@
 # A versão do firmware (proposta §4.8): a do platformio.ini, seguida do commit, por exemplo
-# 0.1.0-a58af37, e de -dirty se há mudanças sem commit. Entra só nas fontes de src/, para um
+# 0.1.0-a58af37, de -dirty se há mudanças sem commit e do sufixo do ambiente (-sim no esp32-sim,
+# proposta §4.7). Entra só nas fontes de src/, para um
 # commit novo não recompilar as bibliotecas.
 # Origem: firmware_version.py do firmware_telemetria (origin/main).
 import subprocess
@@ -19,5 +20,6 @@ try:
         versao += "-dirty"
 except (OSError, subprocess.CalledProcessError):
     pass
+versao += env.GetProjectOption("custom_versao_sufixo", "")  # noqa: F821
 
 projenv.Append(CPPDEFINES=[("VGUARD_VERSAO_FIRMWARE", env.StringifyMacro(versao))])  # noqa: F821

@@ -321,7 +321,7 @@ class Conferencia:
         return mensagens
 
     def _mudancas_do_status(self, linha: Valida) -> list[str]:
-        """No $S: a mudança do obd (LENDO → SEM_RESPOSTA etc.), para os cenários do simulador, e
+        """No $S: a mudança do obd (LENDO → SEM_RESPOSTA etc.), para ver o OBD parar e voltar, e
         a do sd (OK → FALHA)."""
         mensagens = []
         for nome, posicao in MUDANCAS_DO_STATUS.items():
