@@ -42,11 +42,26 @@ O `esp32-sim` é o mesmo firmware com uma central simulada no lugar do MCP2515, 
 | `uv run ferramentas/bancada.py --enviar C,obd_hz,15` | Manda a linha com a moldura (`$C,obd_hz,15*63`). Pode repetir; as linhas saem com 2 s de intervalo |
 | `uv run ferramentas/bancada.py --sem-hora` | Não manda o `$H`, para ver o ESP32 em `ESPERA` |
 | `uv run ferramentas/bancada.py --sem-imu` | Não confere a taxa do `$A`, para a bancada sem o ADXL345 ligado |
+| `uv run ferramentas/bancada.py --antes-da-virada 10` | A hora mandada começa 10 s antes da próxima hora cheia (UTC) e segue deslocada, também nos `$H` seguintes e na conferência do `t`. Serve para ver a troca de arquivo do SD |
+| `uv run ferramentas/bancada.py --salvar captura.txt` | Guarda as linhas válidas e os `$H` mandados, para comparar com o cartão |
 
 Com a ferramenta aberta, o que se digita no terminal, seguido de Enter, também vai ao ESP32 com a moldura: `C,obd_hz,15`. A linha que começa com `$` vai como foi digitada, para testar um checksum errado.
 
 Sem `--porta`, ela acha a placa pelo chip USB (CP210x ou CH340/CH9102). O `uv` instala o pyserial sozinho; sem ele, `pip install pyserial==3.5` e `python ferramentas/bancada.py`. Os testes dela: `python -m unittest discover -s ferramentas`.
 
 Para só ver a serial, sem conferir nada: `pio device monitor` (115200 baud).
+
+## Log no microSD
+
+Em `ATIVO`, tudo o que o ESP32 manda pela serial também vai para o cartão, mais os `$H` recebidos, num arquivo por hora: `AAAAMMDD-HH.csv`, na hora UTC. Cada linha é a da serial sem o `$` e sem o `*hh`, e cada arquivo começa com um cabeçalho (`#`) com a versão e as colunas. O cartão precisa estar em FAT32.
+
+Para conferir o cartão contra uma captura da ferramenta de bancada:
+
+```
+uv run ferramentas/bancada.py --segundos 600 --salvar captura.txt
+python ferramentas/comparar_sd.py captura.txt /media/$USER/<cartão>/*.csv
+```
+
+O `comparar_sd.py` mostra os arquivos com os cabeçalhos e diz o que falta ou sobra no cartão e se alguma linha está no arquivo de outra hora.
 
 O trabalho está nas [Issues](https://github.com/V-guard-org/firmware_esp32/issues), e o jeito de trabalhar nelas está no `CLAUDE.md`.

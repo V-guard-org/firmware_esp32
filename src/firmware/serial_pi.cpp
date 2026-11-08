@@ -10,6 +10,7 @@
 #include <cstdlib>
 
 #include "config.h"
+#include "gravacao_sd.h"
 
 namespace vguard::serial_pi {
 
@@ -19,10 +20,12 @@ StreamBufferHandle_t saida = nullptr;
 // Protege o Emissor, o relógio e a taxa do OBD, que as tarefas dividem.
 SemaphoreHandle_t trava = nullptr;
 
-// O buffer na RAM, visto pelo Emissor do núcleo como o destino das linhas.
+// O buffer na RAM, visto pelo Emissor do núcleo como o destino das linhas. Cada linha também vai
+// para a fila do SD, mesmo a que não couber na serial (proposta §4.5).
 class BufferDeSaida final : public protocolo::Destino {
  public:
   bool escrever(const char *linha, size_t tamanho) override {
+    gravacao_sd::enfileirar(linha, tamanho);
     // Com a trava, só um escreve por vez: o espaço visto aqui não diminui antes do envio, e
     // a linha entra inteira ou não entra.
     if (xStreamBufferSpacesAvailable(saida) < tamanho) {
@@ -151,6 +154,12 @@ void aplicar(const protocolo::Comando &comando) {
     case Tipo::hora: {
       ComTrava com_trava;
       relogio.acertar(comando.unix_ms, agora_ms());
+      // O $H recebido também vai para o SD, na ordem das linhas emitidas.
+      protocolo::Linha linha('H');
+      linha.campo_inteiro(comando.unix_ms);
+      if (linha.fechar()) {
+        gravacao_sd::enfileirar(linha.dados(), linha.tamanho());
+      }
       break;
     }
     case Tipo::hora_invalida:

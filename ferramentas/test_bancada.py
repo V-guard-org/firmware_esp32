@@ -4,8 +4,8 @@
 """
 import unittest
 
-from bancada import (Conferencia, PapelDaPi, Valida, checksum, enmoldurar, ler_linha,
-                     rara_ou_problema)
+from bancada import (Conferencia, PapelDaPi, Valida, checksum, deslocamento_antes_da_virada,
+                     enmoldurar, ler_linha, rara_ou_problema)
 
 
 def moldura(corpo: str) -> bytes:
@@ -223,7 +223,7 @@ class TestConferenciaDoAcelerometro(unittest.TestCase):
 
 
 class TestMudancaDoObd(unittest.TestCase):
-    """A mudança do obd do $S, para os cenários do simulador (#7)."""
+    """A mudança do obd do $S, para ver o OBD parar e voltar (#7)."""
 
     def test_mostra_cada_mudanca_uma_vez(self):
         conferencia = Conferencia(conferir_taxa_do_a=False)
@@ -238,6 +238,26 @@ class TestMudancaDoObd(unittest.TestCase):
                           "-- obd: SEM_RESPOSTA → ESCUTANDO"], mudancas)
         self.assertTrue(all(rara_ou_problema(m) for m in mudancas))
         self.assertFalse(conferencia.falhou())
+
+    def test_mostra_a_mudanca_do_sd(self):
+        conferencia = Conferencia(conferir_taxa_do_a=False)
+        mensagens = []
+        for seq, sd in enumerate(["OK", "OK", "FALHA"]):
+            linha = moldura(f"S,{seq},{HORA},{seq},ATIVO,PARADO,OK,{sd},97,12.5,0")
+            mensagens += conferencia.linha(linha)
+        self.assertEqual(["-- sd: OK", "-- sd: OK → FALHA"],
+                         [m for m in mensagens if m.startswith("-- sd")])
+
+
+class TestAntesDaVirada(unittest.TestCase):
+    def test_deslocamento_ate_10_s_antes_da_proxima_hora(self):
+        agora = 1_794_099_493_000  # 00:58:13 UTC
+        deslocamento = deslocamento_antes_da_virada(agora, 10)
+        self.assertEqual(1_794_099_590_000, agora + deslocamento)  # 00:59:50
+
+    def test_perto_da_virada_volta_um_pouco(self):
+        agora = 1_794_099_595_000  # 00:59:55: 10 s antes da próxima hora é 5 s atrás
+        self.assertEqual(-5_000, deslocamento_antes_da_virada(agora, 10))
 
 
 class TestEnmoldurar(unittest.TestCase):
