@@ -203,6 +203,18 @@ class TestConferenciaDoAcelerometro(unittest.TestCase):
         self.assertEqual(2, c.quantidade_a)
         self.assertIn("ax +0.20, ay +0.00, az +9.80, |a| 9.80 m/s² (2 linhas)", c.resumo())
 
+    def test_sem_imu_nao_confere_a_taxa(self):
+        conferencia = Conferencia(conferir_taxa_do_a=False)
+        for linha in [ativo_com(0, 0, imu="FALHA"), ativo_com(1, 0, imu="FALHA"),
+                      ativo_com(2, 0, imu="FALHA", descartadas=1)]:
+            conferencia.linha(linha)
+        conferencia.terminar()
+        self.assertEqual(0, conferencia.fora_da_taxa)
+        self.assertIn("não conferido (--sem-imu)", conferencia.resumo())
+        # As descartadas continuam conferidas.
+        self.assertEqual(1, conferencia.descartadas)
+        self.assertTrue(conferencia.falhou())
+
     def test_imu_aparece_no_primeiro_status(self):
         _, mensagens = self.conferir([boot(), status(1, 0)])
         self.assertIn("-- imu: FALHA", mensagens)

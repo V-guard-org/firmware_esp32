@@ -39,6 +39,7 @@ Para conferir as regras do núcleo (`CODING_STANDARDS.md`): `python ferramentas/
 | `uv run ferramentas/bancada.py --reiniciar` | Reinicia o ESP32 pelo EN ao abrir a porta, para pegar o `$B` |
 | `uv run ferramentas/bancada.py --enviar C,obd_hz,15` | Manda a linha com a moldura (`$C,obd_hz,15*63`). Pode repetir; as linhas saem com 2 s de intervalo |
 | `uv run ferramentas/bancada.py --sem-hora` | Não manda o `$H`, para ver o ESP32 em `ESPERA` |
+| `uv run ferramentas/bancada.py --sem-imu` | Não confere a taxa do `$A`, para a bancada sem o ADXL345 ligado |
 
 Com a ferramenta aberta, o que se digita no terminal, seguido de Enter, também vai ao ESP32 com a moldura: `C,obd_hz,15`. A linha que começa com `$` vai como foi digitada, para testar um checksum errado.
 

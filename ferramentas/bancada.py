@@ -33,7 +33,8 @@ O que conta como problema:
 - fora da hora: o t da linha a mais de 1 s da hora do notebook na chegada (o t 0, sem hora, não
   conta);
 - continua em ESPERA: um $S com ESPERA mais de 3 s depois de um $H mandado pela ferramenta;
-- taxa do $A: entre dois $S seguidos em ATIVO, menos de 49 ou mais de 51 $A;
+- taxa do $A: entre dois $S seguidos em ATIVO, menos de 49 ou mais de 51 $A. --sem-imu não
+  confere, para as bancadas sem o ADXL345 ligado;
 - descartadas: o campo descartadas do $S passou de 0 (linhas que não couberam na saída do
   ESP32).
 
@@ -119,7 +120,9 @@ class Conferencia:
     """Conta as linhas do ESP32 e acha os problemas. Não sabe nada da porta: recebe as linhas
     já separadas pelo \\n, e devolve o que mostrar."""
 
-    def __init__(self):
+    def __init__(self, conferir_taxa_do_a: bool = True):
+        # Sem o ADXL345 ligado (--sem-imu), não chega $A, e a taxa não é conferida.
+        self.conferir_taxa_do_a = conferir_taxa_do_a
         self.validas = 0
         self.corrompidas = 0
         self.perdidas = 0
@@ -199,7 +202,8 @@ class Conferencia:
             f"  linhas com o t a mais de 1 s do notebook: {self.fora_da_hora}",
             f"  $S em ESPERA mais de 3 s depois do $H: {self.esperas}",
             "  $A entre dois $S em ATIVO: " + (
-                "nenhum intervalo para comparar" if self.menor_a_por_status is None
+                "não conferido (--sem-imu)" if not self.conferir_taxa_do_a
+                else "nenhum intervalo para comparar" if self.menor_a_por_status is None
                 else f"de {self.menor_a_por_status} a {self.maior_a_por_status}"
                      f" (fora de 49 a 51: {self.fora_da_taxa})"),
             f"  descartadas no ESP32: {self.descartadas}",
@@ -315,7 +319,7 @@ class Conferencia:
                 self.descartadas += int(descartadas) - self._ultimas_descartadas
                 mensagens.append(f"!! o ESP32 descartou linhas: descartadas {descartadas}")
             self._ultimas_descartadas = int(descartadas)
-        if self._ultimo_estado == "ATIVO" and estado == "ATIVO":
+        if self.conferir_taxa_do_a and self._ultimo_estado == "ATIVO" and estado == "ATIVO":
             mensagens += self._taxa_do_acelerometro(self._a_desde_o_status)
         self._ultimo_estado = estado
         self._a_desde_o_status = 0
@@ -451,6 +455,8 @@ def main() -> int:
                             help="reinicia o ESP32 pelo EN ao abrir a porta, para pegar o $B")
     argumentos.add_argument("--sem-hora", action="store_true",
                             help="não manda o $H, para ver o ESP32 em ESPERA")
+    argumentos.add_argument("--sem-imu", action="store_true",
+                            help="não confere a taxa do $A, para a bancada sem o ADXL345 ligado")
     argumentos.add_argument("--enviar", action="append", default=[], metavar="LINHA",
                             help="manda a linha (C,obd_hz,15) com a moldura; repetível, com 2 s "
                                  "de intervalo a partir da primeira linha válida")
@@ -467,7 +473,7 @@ def main() -> int:
     print(f"Lendo {nome_porta} a {BAUD} baud" +
           (f" por {args.segundos:g} s" if args.segundos else ", Ctrl+C para sair") + ".")
 
-    conferencia = Conferencia()
+    conferencia = Conferencia(conferir_taxa_do_a=not args.sem_imu)
     pi = PapelDaPi(mandar_hora=not args.sem_hora, enviar=args.enviar)
     teclado: queue.Queue = queue.Queue()
     threading.Thread(target=ler_teclado, args=(teclado,), daemon=True).start()
