@@ -7,7 +7,7 @@
 #include <atomic>
 #include <cstdlib>
 
-#include "adxl345.h"
+#include "acelerometro.h"
 #include "can.h"
 #include "config.h"
 #include "imu.h"
@@ -39,6 +39,7 @@ std::atomic<bool> dentro_da_faixa{false};
 bool conferencia_feita = false;
 imu::Tratamento tratamento;
 bool avisou_calibracao = false;
+bool avisou_simulado = false;
 TickType_t ultima_tentativa = 0;
 
 // As 10 leituras da conferência de 1 g, uma a cada 10 ms. Devolve false se o sensor falhou no
@@ -50,7 +51,7 @@ bool conferir() {
     if (i > 0) {
       vTaskDelay(ticks(config::aquisicao_periodo_ms));
     }
-    if (!adxl345::ler(leituras[i])) {
+    if (!acelerometro::ler(leituras[i])) {
       return false;
     }
   }
@@ -62,7 +63,7 @@ bool conferir() {
 // Destrava o barramento e inicia o sensor. Faz a conferência se ela ainda não foi feita, e o
 // filtro recomeça na próxima leitura. Devolve false se o sensor não respondeu.
 bool religar() {
-  if (!adxl345::iniciar()) {
+  if (!acelerometro::iniciar()) {
     return false;
   }
   if (!conferencia_feita && !conferir()) {
@@ -75,6 +76,11 @@ bool religar() {
 // Um ciclo do acelerômetro em ATIVO. Devolve true se ele demorou (uma tentativa ou um
 // destravamento): o ritmo recomeça dali, em vez de correr atrás das leituras perdidas.
 bool ciclo_do_imu() {
+  // No esp32-sim sem o sensor, as leituras são as do simulado (#19).
+  if (!avisou_simulado && acelerometro::simulado()) {
+    serial_pi::emitir_log(Nivel::aviso, "IMU simulado");
+    avisou_simulado = true;
+  }
   if (!avisou_calibracao) {
     serial_pi::emitir_log(Nivel::aviso, "IMU sem calibracao");
     avisou_calibracao = true;
@@ -92,7 +98,7 @@ bool ciclo_do_imu() {
     return true;
   }
   imu::Leitura leitura;
-  if (!adxl345::ler(leitura)) {
+  if (!acelerometro::ler(leitura)) {
     // Erro de leitura: destrava e inicia de novo, na hora. Se voltar, só se perdem estas
     // leituras, sem aviso.
     if (!religar()) {
@@ -193,7 +199,7 @@ void tarefa(void *) {
 void preparar() {
   can::preparar();
   tratamento.definir_offset(offset);
-  adxl345::instalar();
+  acelerometro::instalar();
   respondendo = religar();
 }
 
