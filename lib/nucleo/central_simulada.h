@@ -19,7 +19,8 @@ constexpr uint32_t mapas_simulados[3] = {0x183A8001UL, 0x00000001UL, 0x40000000U
 // A viagem dura 300 s e recomeça.
 constexpr uint32_t duracao_da_viagem_ms = 300000;
 
-// Os valores da viagem num instante, nas unidades do $O.
+// Os valores da viagem num instante, nas unidades do $O, e a aceleração longitudinal, para o
+// acelerômetro simulado (#19).
 struct Viagem {
   float speed;     // km/h
   float rpm;       // rpm
@@ -29,6 +30,9 @@ struct Viagem {
   float coolant;   // °C
   float iat;       // °C
   float voltage;   // V
+  // A inclinação da velocidade no trecho, em m/s²: +1,11 acelerando de 0 a 80 km/h em 20 s,
+  // −1,11 freando, e 0 no resto.
+  float aceleracao;
 };
 
 // Os valores em ms desde o boot. A viagem é interpolada entre os pontos do perfil (#17); o

@@ -96,6 +96,8 @@ Viagem viagem(uint32_t ms_desde_o_boot) {
                     static_cast<float>(aquecendo) / static_cast<float>(aquecimento_ms));
   v.iat = iat;
   v.voltage = voltage;
+  // km/h por ms vira m/s²: ÷ 3,6 e × 1000.
+  v.aceleracao = (b.speed - a.speed) / 3.6f * 1000.0f / static_cast<float>(b.ms - a.ms);
   return v;
 }
 
