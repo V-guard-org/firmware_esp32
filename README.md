@@ -28,7 +28,17 @@ Precisa do [PlatformIO](https://platformio.org/), pela extensão do VS Code ou p
 
 Para conferir as regras do núcleo (`CODING_STANDARDS.md`): `python ferramentas/checa_nucleo.py`.
 
-O simulador escreve na USB dele, em texto livre, o cenário em uso e um resumo a cada 5 s (pedidos, respondidos e erros de envio). Para ver: `pio device monitor`, com a USB do simulador.
+O simulador escreve na USB dele, em texto livre, o cenário em uso e um resumo a cada 5 s (pedidos, respondidos, respostas negativas e erros de envio). Para ver: `pio device monitor`, com a USB do simulador. Uma letra digitada ali troca o cenário, e o simulador confirma:
+
+| Letra | Cenário |
+|---|---|
+| `n` | Normal |
+| `s` | PID 0F sem resposta |
+| `a` | PID 0F com "aguarde" (`03 7F 01 78`), e a resposta 400 ms depois do pedido |
+| `r` | PID 0F recusado (`03 7F 01 31`) |
+| `m` | Central muda: o tráfego de fundo continua, e nenhum pedido é respondido |
+| `d` | Carro desligado: tudo em silêncio, e o MCP2515 do simulador só escuta, sem confirmar (ACK) os pedidos |
+| `2` | Segunda central em 0x7E9, respondendo junto com valores FF, que o firmware deve ignorar |
 
 ## Ferramenta de bancada
 

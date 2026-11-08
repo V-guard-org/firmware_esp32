@@ -86,10 +86,21 @@ void Maquina::comecar(uint32_t agora) {
   estado_ = protocolo::EstadoObd::escutando;
   viu_trafego_ = false;
   aguardando_ = false;
+  // A primeira descoberta não espera os 15 s: sai com o primeiro tráfego.
+  parou_ = false;
+  avisou_parada_ = false;
+}
+
+bool Maquina::pedindo() const {
+  return estado_ == protocolo::EstadoObd::descobrindo || estado_ == protocolo::EstadoObd::lendo;
+}
+
+bool Maquina::trafego_recente(uint32_t agora) const {
+  return viu_trafego_ && uint32_t(agora - ultimo_trafego_) <= trafego_recente_ms;
 }
 
 void Maquina::receber(const Quadro &quadro, uint32_t agora) {
-  if (estado_ == protocolo::EstadoObd::parado) {
+  if (estado_ == protocolo::EstadoObd::parado || estado_ == protocolo::EstadoObd::falha) {
     return;
   }
   viu_trafego_ = true;
@@ -97,8 +108,15 @@ void Maquina::receber(const Quadro &quadro, uint32_t agora) {
   if (!aguardando_) {
     return;
   }
-  // A recusa, o "aguarde" e o que não é a resposta do pedido esperam o tempo limite (as regras
-  // da recusa vêm no #7).
+  // A recusa conta como falha. O "aguarde" e o que não é a resposta do pedido esperam o tempo
+  // limite.
+  uint8_t codigo = 0;
+  if (resposta_negativa(quadro.id, quadro.dlc, quadro.dados, id_resposta, codigo)) {
+    if (codigo != codigo_aguarde) {
+      falhar(Falha::recusa, agora);
+    }
+    return;
+  }
   uint8_t bytes = 0;
   if (!resposta_positiva(quadro.id, quadro.dlc, quadro.dados, id_resposta, pendente_, bytes)) {
     return;
@@ -108,6 +126,7 @@ void Maquina::receber(const Quadro &quadro, uint32_t agora) {
       return;
     }
     aguardando_ = false;
+    falhas_seguidas_ = 0;
     responder_mapa(quadro.dados + 3);
     return;
   }
@@ -115,22 +134,37 @@ void Maquina::receber(const Quadro &quadro, uint32_t agora) {
     return;
   }
   aguardando_ = false;
+  falhas_seguidas_ = 0;
+  falhas_[campo_pendente_] = 0;
+  const Campo &campo = campos[campo_pendente_];
   float valor = 0;
-  for (const Campo &campo : campos) {
-    if (campo.pid == pendente_ && decodificar(pendente_, quadro.dados + 3, bytes, valor)) {
-      saida_.emitir_obd(campo.nome, valor_escalado(valor, campo.casas), campo.casas);
-    }
+  if (decodificar(pendente_, quadro.dados + 3, bytes, valor)) {
+    saida_.emitir_obd(campo.nome, valor_escalado(valor, campo.casas), campo.casas);
+  }
+}
+
+void Maquina::erro_no_can(uint32_t agora) {
+  if (pedindo()) {
+    parar(Motivo::erro_no_can, agora);
   }
 }
 
 void Maquina::tique(uint32_t agora, uint16_t obd_hz_decimos) {
   switch (estado_) {
     case protocolo::EstadoObd::escutando:
-      if (viu_trafego_ && uint32_t(agora - ultimo_trafego_) <= trafego_recente_ms) {
-        comecar_descoberta(agora);
-        break;
+    case protocolo::EstadoObd::sem_resposta: {
+      const bool trafego = trafego_recente(agora);
+      estado_ = trafego ? protocolo::EstadoObd::sem_resposta : protocolo::EstadoObd::escutando;
+      const bool esperou = !parou_ || uint32_t(agora - parou_em_) >= intervalo_tentativas_ms;
+      if (!trafego || !esperou) {
+        return;
       }
-      return;
+      comecar_descoberta(agora);
+      if (!pedindo()) {
+        return;
+      }
+      break;
+    }
     case protocolo::EstadoObd::descobrindo:
     case protocolo::EstadoObd::lendo:
       break;
@@ -141,26 +175,30 @@ void Maquina::tique(uint32_t agora, uint16_t obd_hz_decimos) {
     if (!tempo_esgotado(agora, enviado_em_, tempo_limite_ms)) {
       return;
     }
-    // Sem resposta: na leitura, o rodízio já está no próximo PID; na descoberta, o mapa da vez
-    // não mudou e é pedido de novo.
-    aguardando_ = false;
+    falhar(Falha::sem_resposta, agora);
+    if (!pedindo()) {
+      return;
+    }
   }
   if (!tempo_esgotado(agora, proximo_ms_, 0)) {
     return;
   }
   if (estado_ == protocolo::EstadoObd::descobrindo) {
     pedir(mapa_atual_, agora, obd_hz_decimos);
-  } else if (quantidade_ativos_ > 0) {
-    const uint8_t campo = ativos_[proximo_ativo_];
-    proximo_ativo_ = static_cast<uint8_t>((proximo_ativo_ + 1) % quantidade_ativos_);
-    pedir(campos[campo].pid, agora, obd_hz_decimos);
+  } else if (!pedir_proximo_pid(agora, obd_hz_decimos)) {
+    parar(Motivo::sem_pid_ativo, agora);
   }
 }
 
 void Maquina::comecar_descoberta(uint32_t agora) {
-  saida_.configurar_leitura();
+  // Sem os filtros e o modo normal, não dá para pedir: para, e o MCP2515 volta a só escutar.
+  if (!saida_.configurar_leitura()) {
+    parar(Motivo::erro_no_can, agora);
+    return;
+  }
   estado_ = protocolo::EstadoObd::descobrindo;
   aguardando_ = false;
+  falhas_seguidas_ = 0;
   mapa_atual_ = 0;
   for (uint32_t &m : mapas_) {
     m = 0;
@@ -178,6 +216,20 @@ void Maquina::pedir(uint8_t pid, uint32_t agora, uint16_t obd_hz_decimos) {
   pendente_ = pid;
   enviado_em_ = agora;
   marcar_proximo(agora, obd_hz_decimos);
+}
+
+bool Maquina::pedir_proximo_pid(uint32_t agora, uint16_t obd_hz_decimos) {
+  // O próximo do rodízio que não está suspenso.
+  for (uint8_t n = 0; n < quantidade_ativos_; ++n) {
+    const uint8_t campo = ativos_[proximo_ativo_];
+    proximo_ativo_ = static_cast<uint8_t>((proximo_ativo_ + 1) % quantidade_ativos_);
+    if (!suspenso_[campo]) {
+      campo_pendente_ = campo;
+      pedir(campos[campo].pid, agora, obd_hz_decimos);
+      return true;
+    }
+  }
+  return false;
 }
 
 void Maquina::marcar_proximo(uint32_t agora, uint16_t obd_hz_decimos) {
@@ -209,6 +261,8 @@ void Maquina::responder_mapa(const uint8_t *dados_do_mapa) {
 void Maquina::terminar_descoberta() {
   quantidade_ativos_ = 0;
   for (uint8_t i = 0; i < quantidade_campos; ++i) {
+    falhas_[i] = 0;
+    suspenso_[i] = false;
     const uint8_t pid = campos[i].pid;
     const uint8_t base = static_cast<uint8_t>(pid / 0x20);
     if (suportado(mapas_[base], static_cast<uint8_t>(pid - base * 0x20))) {
@@ -216,8 +270,67 @@ void Maquina::terminar_descoberta() {
     }
   }
   proximo_ativo_ = 0;
+  falhas_seguidas_ = 0;
   estado_ = protocolo::EstadoObd::lendo;
+  // A descoberta deu certo: encerra o episódio, e a próxima parada volta a avisar.
+  avisou_parada_ = false;
   saida_.emitir_pids(mapas_[0], mapas_[1], mapas_[2]);
+}
+
+void Maquina::falhar(Falha falha, uint32_t agora) {
+  aguardando_ = false;
+  if (falhas_seguidas_ < falhas_seguidas_para_parar) {
+    ++falhas_seguidas_;
+  }
+  if (estado_ == protocolo::EstadoObd::descobrindo) {
+    if (mapa_atual_ == 0) {
+      parar(Motivo::sem_resposta, agora);
+    } else {
+      // Os mapas 20 e 40 que faltam não impedem os PIDs já confirmados.
+      terminar_descoberta();
+    }
+    return;
+  }
+  if (!suspenso_[campo_pendente_] && ++falhas_[campo_pendente_] >= falhas_para_suspender) {
+    suspenso_[campo_pendente_] = true;
+    avisar_pid_suspenso(pendente_, falha);
+  }
+  if (falha == Falha::sem_resposta && falhas_seguidas_ >= falhas_seguidas_para_parar) {
+    parar(Motivo::sem_resposta, agora);
+  }
+}
+
+void Maquina::parar(Motivo motivo, uint32_t agora) {
+  aguardando_ = false;
+  parou_ = true;
+  parou_em_ = agora;
+  // Só conta o tráfego visto depois da parada.
+  viu_trafego_ = false;
+  if (!avisou_parada_) {
+    avisou_parada_ = true;
+    switch (motivo) {
+      case Motivo::sem_resposta: saida_.emitir_aviso("OBD sem resposta"); break;
+      case Motivo::erro_no_can: saida_.emitir_aviso("OBD erro no CAN"); break;
+      case Motivo::sem_pid_ativo: saida_.emitir_aviso("OBD sem PID ativo"); break;
+    }
+  }
+  estado_ = saida_.voltar_a_escutar() ? protocolo::EstadoObd::escutando
+                                      : protocolo::EstadoObd::falha;
+}
+
+void Maquina::avisar_pid_suspenso(uint8_t pid, Falha falha) {
+  constexpr char hexa[] = "0123456789ABCDEF";
+  // "PID 0F sem resposta" ou "PID 0F recusado".
+  char texto[24] = "PID ";
+  texto[4] = hexa[pid >> 4];
+  texto[5] = hexa[pid & 0x0F];
+  const char *resto = falha == Falha::sem_resposta ? " sem resposta" : " recusado";
+  size_t i = 6;
+  for (; *resto != '\0' && i + 1 < sizeof(texto); ++resto) {
+    texto[i++] = *resto;
+  }
+  texto[i] = '\0';
+  saida_.emitir_aviso(texto);
 }
 
 }  // namespace vguard::obd

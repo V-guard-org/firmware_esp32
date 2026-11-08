@@ -38,8 +38,9 @@ O que conta como problema:
 - descartadas: o campo descartadas do $S passou de 0 (linhas que não couberam na saída do
   ESP32).
 
-Também aparecem, no modo com tempo, a mudança do imu do $S e a pausa e a volta do $A (um
-intervalo entre dois $S em ATIVO sem nenhum $A). O resumo traz as médias de ax, ay, az e |a|.
+Também aparecem, no modo com tempo, a mudança do imu e do obd do $S e a pausa e a volta do $A
+(um intervalo entre dois $S em ATIVO sem nenhum $A). O resumo traz as médias de ax, ay, az e
+|a|.
 
 A seq voltar a 0 é reinício do ESP32, não lacuna. O texto que a ROM imprime no boot, e a linha
 cortada pelo reinício, chegam antes do $B com seq 0 e são ignorados sem contar como corrompidos.
@@ -155,6 +156,7 @@ class Conferencia:
         self._a_desde_o_status = 0
         self._ultimo_estado: str | None = None
         self._ultimo_imu: str | None = None
+        self._ultimo_obd: str | None = None
         self._ultimas_descartadas = 0
         self._a_parado = False
         # Linhas recusadas esperando a próxima válida: se ela for um reinício (seq 0), eram o
@@ -262,6 +264,7 @@ class Conferencia:
         if linha.tipo == "A":
             mensagens += self._acelerometro(linha)
         elif linha.tipo == "S" and len(linha.campos) == CAMPOS_DO_STATUS:
+            mensagens += self._status_do_obd(linha)
             mensagens += self._status_do_acelerometro(linha)
         if hora_ms is not None:
             mensagens += self._conferir_hora(linha, hora_ms)
@@ -305,6 +308,16 @@ class Conferencia:
             for i, valor in enumerate((ax, ay, az, (ax * ax + ay * ay + az * az) ** 0.5)):
                 self._somas_a[i] += valor
         return mensagens
+
+    def _status_do_obd(self, linha: Valida) -> list[str]:
+        """No $S: a mudança do obd (LENDO → SEM_RESPOSTA etc.), para os cenários do simulador."""
+        obd = linha.campos[5]
+        if obd == self._ultimo_obd:
+            return []
+        mensagem = (f"-- obd: {obd}" if self._ultimo_obd is None
+                    else f"-- obd: {self._ultimo_obd} → {obd}")
+        self._ultimo_obd = obd
+        return [mensagem]
 
     def _status_do_acelerometro(self, linha: Valida) -> list[str]:
         """No $S: a mudança do imu, as descartadas e a quantidade de $A desde o $S anterior."""

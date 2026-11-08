@@ -112,7 +112,8 @@ bool ciclo_do_imu() {
 
 // --- OBD ---
 
-// O MCP2515: ainda não iniciado (ESPERA), iniciado ou sem resposta.
+// O MCP2515: ainda não iniciado (ESPERA), iniciado ou sem resposta. Sem resposta, fica assim até
+// o próximo boot (obd FALHA).
 enum class Can : uint8_t { nao_iniciado, pronto, falhou };
 Can can = Can::nao_iniciado;
 // O obd do $S, lido pelo loop().
@@ -121,13 +122,8 @@ std::atomic<EstadoObd> obd_no_status{EstadoObd::parado};
 // O que a máquina do OBD pede: o MCP2515 e a serial.
 class SaidaDoObd final : public obd::Saida {
  public:
-  void configurar_leitura() override {
-    // Sem resposta do MCP2515: obd FALHA até o próximo boot. As regras de voltar a escutar vêm
-    // no #7.
-    if (!can_mcp2515::configurar_leitura()) {
-      can = Can::falhou;
-    }
-  }
+  bool configurar_leitura() override { return can_mcp2515::configurar_leitura(); }
+  bool voltar_a_escutar() override { return can_mcp2515::iniciar_escuta(); }
   void enviar(uint16_t id, const uint8_t (&dados)[8]) override {
     // O quadro que não saiu fica sem resposta, e o tempo limite cuida dele.
     can_mcp2515::enviar(id, dados);
@@ -138,13 +134,14 @@ class SaidaDoObd final : public obd::Saida {
   void emitir_pids(uint32_t mapa00, uint32_t mapa20, uint32_t mapa40) override {
     serial_pi::emitir_pids(mapa00, mapa20, mapa40);
   }
+  void emitir_aviso(const char *texto) override { serial_pi::emitir_log(Nivel::aviso, texto); }
 };
 
 SaidaDoObd saida_do_obd;
 obd::Maquina maquina(saida_do_obd);
 
 // Um ciclo do OBD em ATIVO: inicia o MCP2515 na primeira vez, passa os quadros recebidos à
-// máquina e chama o tique.
+// máquina, confere os erros do CAN enquanto ela pede e chama o tique.
 void ciclo_do_obd() {
   const uint32_t agora = agora_ms();
   if (can == Can::nao_iniciado) {
@@ -160,7 +157,14 @@ void ciclo_do_obd() {
     for (uint32_t n = 0; n < config::obd_quadros_por_ciclo && can_mcp2515::receber(quadro); ++n) {
       maquina.receber(quadro, agora);
     }
+    if (maquina.pedindo() && can_mcp2515::erro_no_barramento()) {
+      maquina.erro_no_can(agora);
+    }
     maquina.tique(agora, serial_pi::obd_hz_decimos());
+    // O MCP2515 não voltou a só escuta: para de falar com ele.
+    if (maquina.estado() == EstadoObd::falha) {
+      can = Can::falhou;
+    }
   }
   obd_no_status = can == Can::pronto ? maquina.estado() : EstadoObd::falha;
 }
