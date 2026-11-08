@@ -51,6 +51,9 @@ constexpr uint32_t serial_periodo_leitura_ms = 10;
 
 // Taxa do OBD ao ligar, em décimos de pedido por segundo: 12,5 (proposta §4.3).
 constexpr uint16_t obd_hz_inicial_decimos = 125;
+// Quadros do CAN lidos por ciclo de 10 ms, no máximo, como no voyage_painel.ino: em só escuta, no
+// carro, chegam centenas por segundo, e a leitura não pode tomar o ciclo inteiro.
+constexpr uint32_t obd_quadros_por_ciclo = 24;
 
 // Período do $S (proposta §5.3).
 constexpr uint32_t periodo_status_ms = 1000;

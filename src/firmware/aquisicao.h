@@ -1,5 +1,9 @@
-// A aquisição (proposta §4.6): a tarefa de prioridade alta que lê o ADXL345 a 100 Hz e, em
-// ATIVO, manda o $A a 50 Hz. Depois, ela recebe também o CAN.
+// A aquisição (proposta §4.6): a tarefa de prioridade alta que, em ATIVO, a cada 10 ms, lê o CAN
+// e o ADXL345. Em ESPERA, ela não lê nenhum dos dois.
+//
+// O OBD (proposta §4.3): no primeiro ciclo em ATIVO, o MCP2515 é iniciado em só escuta; se não
+// responder, obd FALHA até o próximo boot. Depois, os quadros recebidos (até 24 por ciclo) vão à
+// máquina do OBD, que descobre os PIDs, pede os 8 de interesse e emite o $P e os $O.
 //
 // O sensor (proposta §4.4):
 // - no boot, antes do $H, ele é iniciado e passa pela conferência de 1 g, com 10 leituras. É a
@@ -14,7 +18,8 @@
 
 namespace vguard::aquisicao {
 
-// No setup(), antes do $B: instala o I²C, inicia o sensor e faz a conferência de 1 g.
+// No setup(), antes do $B: liga o SPI do MCP2515 (sem falar com ele), instala o I²C, inicia o
+// sensor e faz a conferência de 1 g.
 void preparar();
 
 // Cria a tarefa. No setup(), depois do $B e do primeiro $S.
@@ -23,5 +28,9 @@ void iniciar();
 // O imu do $S: FALHA com o sensor fora ou com a conferência de 1 g fora da faixa. Na conferência
 // fora da faixa, o $A continua, e a Pi decide. Pode ser chamada de qualquer tarefa.
 protocolo::EstadoImu estado_imu();
+
+// O obd do $S: PARADO em ESPERA, FALHA sem o MCP2515, ou o estado da máquina (ESCUTANDO,
+// DESCOBRINDO ou LENDO). Pode ser chamada de qualquer tarefa.
+protocolo::EstadoObd estado_obd();
 
 }  // namespace vguard::aquisicao

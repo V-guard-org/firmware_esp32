@@ -1,6 +1,6 @@
 // Protocolo da serial ESP32 ↔ Pi (proposta §5): a moldura $<tipo>,<campos...>*<hh>, o
-// checksum, as linhas que o ESP32 manda ($B, $S, $L e $A) e as que a Pi manda ($H e $C). Só
-// memória de tamanho fixo.
+// checksum, as linhas que o ESP32 manda ($B, $S, $L, $A, $O e $P) e as que a Pi manda ($H e
+// $C). Só memória de tamanho fixo.
 #pragma once
 
 #include <cstddef>
@@ -41,6 +41,8 @@ class Linha {
   // Número com casas decimais fixas, a partir do valor multiplicado por 10^casas:
   // (87625, 2) dá 876.25, e (-5, 2) dá -0.05.
   Linha &campo_decimal(int64_t valor_escalado, uint8_t casas);
+  // Número em hexa maiúsculo, com zeros à esquerda até `digitos`: (0x183A8001, 8) dá 183A8001.
+  Linha &campo_hexa(uint32_t valor, uint8_t digitos);
 
   // Fecha a moldura com *hh e \n. Devolve false se a linha é inválida.
   bool fechar();
@@ -125,6 +127,11 @@ class Emissor {
   void emitir_log(uint64_t t, Nivel nivel, const char *texto);
   // $A,<seq>,<t>,<ax>,<ay>,<az>, com cada eixo em centésimos de m/s²: 979 sai como 9.79.
   void emitir_acelerometro(uint64_t t, int32_t ax, int32_t ay, int32_t az);
+  // $O,<seq>,<t>,<campo>,<valor>, com o valor multiplicado por 10^casas: (87625, 2) sai como
+  // 876.25.
+  void emitir_obd(uint64_t t, const char *campo, int64_t valor_escalado, uint8_t casas);
+  // $P,<seq>,<t>,<mapa00>,<mapa20>,<mapa40>, com 8 dígitos hexa maiúsculos cada.
+  void emitir_pids(uint64_t t, uint32_t mapa00, uint32_t mapa20, uint32_t mapa40);
 
   // Linhas que não couberam no destino desde o boot.
   uint32_t descartadas() const { return descartadas_; }

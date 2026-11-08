@@ -1,7 +1,7 @@
 // Firmware do ESP32 do V-GUARD (proposta §4). Por enquanto, ele se apresenta pela USB ($B ao
 // ligar e um $S por segundo, #2), obedece à Pi (o $H o põe em ATIVO e o $C,obd_hz muda a taxa
-// do OBD, #3) e, em ATIVO, manda o acelerômetro a 50 Hz ($A, #4). O OBD e o SD vêm nos tickets
-// seguintes.
+// do OBD, #3) e, em ATIVO, manda o acelerômetro a 50 Hz ($A, #4) e o OBD ($P e $O, #6). O SD
+// vem nos tickets seguintes.
 #include <Arduino.h>
 #include <esp_log.h>
 #include <esp_system.h>
@@ -17,7 +17,6 @@ static_assert(__cplusplus >= 201703L, "o firmware usa C++17 (proposta §4.8)");
 
 namespace {
 
-using vguard::protocolo::EstadoObd;
 using vguard::protocolo::EstadoSd;
 using vguard::protocolo::MotivoReset;
 using vguard::protocolo::Status;
@@ -42,7 +41,7 @@ MotivoReset motivo_do_reset() {
 Status status_atual(uint32_t uptime_s) {
   Status status{};
   status.uptime_s = uptime_s;
-  status.obd = EstadoObd::parado;
+  status.obd = vguard::aquisicao::estado_obd();
   status.imu = vguard::aquisicao::estado_imu();
   status.sd = EstadoSd::ausente;
   status.sd_livre = 0;
