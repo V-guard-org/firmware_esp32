@@ -1,7 +1,7 @@
 // Firmware do ESP32 do V-GUARD (proposta §4). Por enquanto, ele se apresenta pela USB ($B ao
 // ligar e um $S por segundo, #2), obedece à Pi (o $H o põe em ATIVO e o $C,obd_hz muda a taxa
-// do OBD, #3) e, em ATIVO, manda o acelerômetro a 50 Hz ($A, #4) e o OBD ($P e $O, #6). O SD
-// vem nos tickets seguintes.
+// do OBD, #3), em ATIVO manda o acelerômetro a 50 Hz ($A, #4) e o OBD ($P e $O, #6), e grava
+// tudo no microSD, um arquivo por hora (#8).
 #include <Arduino.h>
 #include <esp_log.h>
 #include <esp_system.h>
@@ -10,6 +10,7 @@
 
 #include "aquisicao.h"
 #include "config.h"
+#include "gravacao_sd.h"
 #include "protocolo.h"
 #include "serial_pi.h"
 
@@ -17,7 +18,6 @@ static_assert(__cplusplus >= 201703L, "o firmware usa C++17 (proposta §4.8)");
 
 namespace {
 
-using vguard::protocolo::EstadoSd;
 using vguard::protocolo::MotivoReset;
 using vguard::protocolo::Status;
 
@@ -43,8 +43,8 @@ Status status_atual(uint32_t uptime_s) {
   status.uptime_s = uptime_s;
   status.obd = vguard::aquisicao::estado_obd();
   status.imu = vguard::aquisicao::estado_imu();
-  status.sd = EstadoSd::ausente;
-  status.sd_livre = 0;
+  status.sd = vguard::gravacao_sd::estado();
+  status.sd_livre = vguard::gravacao_sd::livre();
   return status;
 }
 
@@ -59,11 +59,15 @@ void setup() {
   // Na USB, só as linhas do protocolo: um aviso do ESP-IDF no meio de uma linha a corromperia.
   esp_log_level_set("*", ESP_LOG_NONE);
   vguard::serial_pi::iniciar();
+  // O cartão é montado antes do $B: o $B já vai para a fila do SD, e o primeiro $S sai com o sd
+  // certo.
+  vguard::gravacao_sd::preparar();
   // A conferência de 1 g vem antes do $B (~0,15 s), para o primeiro $S já sair com o imu certo.
   vguard::aquisicao::preparar();
   vguard::serial_pi::emitir_boot(motivo_do_reset());
   vguard::serial_pi::emitir_status(status_atual(uptime_s));
   vguard::aquisicao::iniciar();
+  vguard::gravacao_sd::iniciar();
 }
 
 void loop() {

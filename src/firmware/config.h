@@ -1,4 +1,5 @@
-// Configuração do firmware: pinos (proposta §4.6), endereço do ADXL345 e versão (§4.8).
+// Configuração do firmware: pinos (proposta §4.6), endereço do ADXL345, versão (§4.8), taxas,
+// tempos e tamanhos.
 // O simulador também inclui este arquivo, para usar os mesmos pinos do MCP2515.
 #pragma once
 
@@ -76,6 +77,24 @@ constexpr uint32_t imu_intervalo_tentativas_ms = 1000;
 // Depois do POWER_CTL, a primeira amostra leva 1,1 ms mais um período de 10 ms. Antes disso, os
 // registradores ainda têm zero, ou a amostra de antes do reinício.
 constexpr uint32_t imu_espera_primeira_amostra_ms = 20;
+
+// microSD (proposta §4.5). A fila na RAM guarda ~6 s de linhas (~2,6 KB/s com o OBD a 12,5
+// pedidos/s): folga para as paradas de 10 a 200 ms do cartão numa gravação.
+constexpr size_t sd_tamanho_fila = 16384;
+// A cada 1 s, a tarefa tira a fila, grava e confirma no cartão. É o valor inicial; a equipe
+// ajusta nos testes.
+constexpr uint32_t sd_periodo_gravacao_ms = 1000;
+// O que a tarefa junta na RAM antes de escrever no cartão: ~3 s de linhas.
+constexpr size_t sd_tamanho_bloco = 8192;
+// O sd_livre é medido de novo a cada 60 s.
+constexpr uint32_t sd_periodo_livre_ms = 60000;
+// O SPI do cartão: 4 MHz, como no sketch do Nicolas.
+constexpr uint32_t sd_spi_hz = 4000000;
+// A tarefa da gravação: pilha (o FATFS e o snprintf), prioridade baixa e o núcleo 0, longe da
+// aquisição (proposta §4.6).
+constexpr uint32_t sd_pilha = 6144;
+constexpr unsigned sd_prioridade = 1;
+constexpr int sd_nucleo = 0;
 
 }  // namespace config
 

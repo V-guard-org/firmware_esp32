@@ -9,6 +9,7 @@ protocolo (proposta §5), faz o papel da Pi e mostra o resumo.
     uv run ferramentas/bancada.py --segundos 300   captura 5 min e sai com erro se houver problema
     uv run ferramentas/bancada.py --porta /dev/ttyUSB0 --reiniciar
     uv run ferramentas/bancada.py --segundos 8 --enviar C,obd_hz,15 --enviar C,obd_hz,25
+    uv run ferramentas/bancada.py --antes-da-virada 10 --salvar captura.txt
 
 Sem o uv: `pip install pyserial==3.5` e `python ferramentas/bancada.py`.
 
@@ -23,7 +24,14 @@ O papel da Pi (proposta §5.5):
 - o que se digita no terminal, seguido de Enter, vai ao ESP32 com a moldura: C,obd_hz,15 sai
   como $C,obd_hz,15*hh. A linha que começa com $ vai como foi digitada;
 - --enviar <linha>, repetível, manda cada linha com 2 s de intervalo, a partir da primeira linha
-  válida.
+  válida;
+- --antes-da-virada S: a hora que a ferramenta manda começa S segundos antes da próxima hora
+  cheia (UTC) e anda junto com a do notebook. Os $H seguintes, também depois de um reinício, e a
+  conferência do t usam essa hora deslocada, nunca a hora real do notebook. Serve para ver a
+  troca de arquivo do SD na virada da hora.
+
+--salvar ARQ guarda as linhas válidas como chegaram e os $H mandados, uma por linha, para
+comparar com o cartão: python ferramentas/comparar_sd.py ARQ /media/.../*.csv
 
 O que conta como problema:
 - corrompida: mais de 120 caracteres (sem o \\r\\n), sem $, sem *hh, com checksum errado ou sem
@@ -38,9 +46,9 @@ O que conta como problema:
 - descartadas: o campo descartadas do $S passou de 0 (linhas que não couberam na saída do
   ESP32).
 
-Também aparecem, no modo com tempo, a mudança do imu e do obd do $S e a pausa e a volta do $A
-(um intervalo entre dois $S em ATIVO sem nenhum $A). O resumo traz as médias de ax, ay, az e
-|a|.
+Também aparecem, no modo com tempo, a mudança do imu, do obd e do sd do $S e a pausa e a volta
+do $A (um intervalo entre dois $S em ATIVO sem nenhum $A). O resumo traz as médias de ax, ay, az
+e |a|.
 
 A seq voltar a 0 é reinício do ESP32, não lacuna. O texto que a ROM imprime no boot, e a linha
 cortada pelo reinício, chegam antes do $B com seq 0 e são ignorados sem contar como corrompidos.
@@ -68,6 +76,9 @@ PRAZO_PARA_ATIVO_MS = 3000
 A_POR_STATUS = range(49, 52)
 # Campos do $S: $S,<seq>,<t>,<uptime_s>,<estado>,<obd>,<imu>,<sd>,<sd_livre>,<obd_hz>,<descartadas>
 CAMPOS_DO_STATUS = 11
+# Campos do $S cuja mudança aparece na tela, pela posição em campos (o tipo não conta).
+MUDANCAS_DO_STATUS = {"obd": 5, "sd": 7}
+MS_POR_HORA = 3_600_000
 
 
 def checksum(texto: bytes) -> int:
@@ -156,7 +167,7 @@ class Conferencia:
         self._a_desde_o_status = 0
         self._ultimo_estado: str | None = None
         self._ultimo_imu: str | None = None
-        self._ultimo_obd: str | None = None
+        self._ultimos_do_status: dict[str, str] = {}
         self._ultimas_descartadas = 0
         self._a_parado = False
         # Linhas recusadas esperando a próxima válida: se ela for um reinício (seq 0), eram o
@@ -264,7 +275,7 @@ class Conferencia:
         if linha.tipo == "A":
             mensagens += self._acelerometro(linha)
         elif linha.tipo == "S" and len(linha.campos) == CAMPOS_DO_STATUS:
-            mensagens += self._status_do_obd(linha)
+            mensagens += self._mudancas_do_status(linha)
             mensagens += self._status_do_acelerometro(linha)
         if hora_ms is not None:
             mensagens += self._conferir_hora(linha, hora_ms)
@@ -309,15 +320,18 @@ class Conferencia:
                 self._somas_a[i] += valor
         return mensagens
 
-    def _status_do_obd(self, linha: Valida) -> list[str]:
-        """No $S: a mudança do obd (LENDO → SEM_RESPOSTA etc.), para os cenários do simulador."""
-        obd = linha.campos[5]
-        if obd == self._ultimo_obd:
-            return []
-        mensagem = (f"-- obd: {obd}" if self._ultimo_obd is None
-                    else f"-- obd: {self._ultimo_obd} → {obd}")
-        self._ultimo_obd = obd
-        return [mensagem]
+    def _mudancas_do_status(self, linha: Valida) -> list[str]:
+        """No $S: a mudança do obd (LENDO → SEM_RESPOSTA etc.), para os cenários do simulador, e
+        a do sd (OK → FALHA)."""
+        mensagens = []
+        for nome, posicao in MUDANCAS_DO_STATUS.items():
+            valor = linha.campos[posicao]
+            anterior = self._ultimos_do_status.get(nome)
+            if valor != anterior:
+                mensagens.append(f"-- {nome}: {valor}" if anterior is None
+                                 else f"-- {nome}: {anterior} → {valor}")
+                self._ultimos_do_status[nome] = valor
+        return mensagens
 
     def _status_do_acelerometro(self, linha: Valida) -> list[str]:
         """No $S: a mudança do imu, as descartadas e a quantidade de $A desde o $S anterior."""
@@ -420,6 +434,13 @@ class PapelDaPi:
         return enmoldurar(f"H,{hora_ms}")
 
 
+def deslocamento_antes_da_virada(agora_ms: int, segundos: float) -> int:
+    """Quanto somar à hora do notebook para ela marcar `segundos` antes da próxima hora cheia
+    (UTC), em ms."""
+    proxima_hora = (agora_ms // MS_POR_HORA + 1) * MS_POR_HORA
+    return proxima_hora - round(segundos * 1000) - agora_ms
+
+
 def mostrar(bruta: bytes) -> str:
     return bruta.decode("ascii", errors="backslashreplace").rstrip("\r")
 
@@ -473,6 +494,12 @@ def main() -> int:
     argumentos.add_argument("--enviar", action="append", default=[], metavar="LINHA",
                             help="manda a linha (C,obd_hz,15) com a moldura; repetível, com 2 s "
                                  "de intervalo a partir da primeira linha válida")
+    argumentos.add_argument("--antes-da-virada", type=float, metavar="S",
+                            help="a hora mandada começa S segundos antes da próxima hora cheia "
+                                 "(UTC), para ver a troca de arquivo do SD")
+    argumentos.add_argument("--salvar", metavar="ARQ",
+                            help="guarda as linhas válidas e os $H mandados, para comparar com o "
+                                 "cartão (comparar_sd.py)")
     args = argumentos.parse_args()
 
     import serial
@@ -485,6 +512,14 @@ def main() -> int:
         reiniciar_pelo_en(porta)
     print(f"Lendo {nome_porta} a {BAUD} baud" +
           (f" por {args.segundos:g} s" if args.segundos else ", Ctrl+C para sair") + ".")
+
+    deslocamento_ms = 0
+    if args.antes_da_virada is not None:
+        deslocamento_ms = deslocamento_antes_da_virada(int(time.time() * 1000),
+                                                       args.antes_da_virada)
+        print(f"Hora deslocada em {deslocamento_ms / 1000:+.3f} s: a virada da hora vem em "
+              f"{args.antes_da_virada:g} s.")
+    salvar = open(args.salvar, "w", encoding="ascii", newline="\n") if args.salvar else None
 
     conferencia = Conferencia(conferir_taxa_do_a=not args.sem_imu)
     pi = PapelDaPi(mandar_hora=not args.sem_hora, enviar=args.enviar)
@@ -505,6 +540,8 @@ def main() -> int:
             # do --enviar pode ser inválido de propósito.
             if da_ferramenta and envio.startswith(b"$H,"):
                 conferencia.hora_enviada(hora_ms)
+            if salvar is not None and envio.startswith(b"$H,"):
+                salvar.write(envio.decode(errors="backslashreplace").rstrip() + "\n")
             mostrar_mensagens([">> " + envio.decode(errors="backslashreplace").rstrip()])
 
     try:
@@ -512,10 +549,12 @@ def main() -> int:
             resto += porta.read(porta.in_waiting or 1)
             *linhas, resto = resto.split(b"\n")
             agora = time.monotonic()
-            hora_ms = int(time.time() * 1000)
+            hora_ms = int(time.time() * 1000) + deslocamento_ms
             for bruta in linhas:
                 mostrar_mensagens(conferencia.linha(bruta, hora_ms))
                 if conferencia.ultima is not None:
+                    if salvar is not None:
+                        salvar.write(mostrar(bruta) + "\n")
                     mandar(pi.recebeu(conferencia.ultima, agora, hora_ms), hora_ms)
             mandar(pi.tique(agora, hora_ms), hora_ms)
             mandar(pi.agendadas(agora), hora_ms, da_ferramenta=False)
@@ -525,6 +564,8 @@ def main() -> int:
         pass
     finally:
         porta.close()
+        if salvar is not None:
+            salvar.close()
     # O pedaço sem \n no fim foi cortado pela própria captura e não conta.
     for mensagem in conferencia.terminar():
         if args.segundos is None or rara_ou_problema(mensagem):
