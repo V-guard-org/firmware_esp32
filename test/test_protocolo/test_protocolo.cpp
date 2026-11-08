@@ -255,6 +255,54 @@ static void teste_maior_acelerometro_cabe() {
   TEST_ASSERT_TRUE(linha.fechar());
 }
 
+// Gasta as primeiras `quantidade` seq com linhas que não cabem, para chegar à do exemplo.
+static void gastar_seq(Emissor &emissor, DestinoDeTeste &destino, int quantidade) {
+  destino.cheio = true;
+  for (int i = 0; i < quantidade; ++i) {
+    emissor.emitir_status(0, status_sem_pecas(0));
+  }
+  destino.cheio = false;
+}
+
+static void teste_pids_do_exemplo() {
+  DestinoDeTeste destino;
+  Emissor emissor(destino);
+  gastar_seq(emissor, destino, 60);
+  emissor.emitir_pids(1793980813000ULL, 0x183A8001UL, 0x00000001UL, 0x40000000UL);
+  TEST_ASSERT_EQUAL_STRING("$P,60,1793980813000,183A8001,00000001,40000000*3A\n",
+                           destino.linhas[0]);
+}
+
+static void teste_obd_do_exemplo() {
+  DestinoDeTeste destino;
+  Emissor emissor(destino);
+  gastar_seq(emissor, destino, 61);
+  emissor.emitir_obd(1793980813020ULL, "rpm", 87625, 2);
+  gastar_seq(emissor, destino, 3);
+  emissor.emitir_obd(1793980813100ULL, "coolant", 47, 0);
+  TEST_ASSERT_EQUAL_STRING("$O,61,1793980813020,rpm,876.25*02\n", destino.linhas[0]);
+  TEST_ASSERT_EQUAL_STRING("$O,65,1793980813100,coolant,47*0D\n", destino.linhas[1]);
+}
+
+static void teste_formatos_do_obd() {
+  // Os 8 campos, com as casas da proposta §5.3.
+  Linha linha('O');
+  linha.campo_decimal(87600, 2).campo_decimal(60, 0).campo_decimal(-40, 0).campo_decimal(522, 1);
+  linha.campo_decimal(13800, 3).campo_decimal(0, 1);
+  TEST_ASSERT_TRUE(linha.fechar());
+  const char esperado[] = "$O,876.00,60,-40,52.2,13.800,0.0*";
+  TEST_ASSERT_EQUAL_STRING_LEN(esperado, linha.dados(), std::strlen(esperado));
+}
+
+static void teste_campo_hexa() {
+  Linha linha('X');
+  linha.campo_hexa(0, 8).campo_hexa(0xFFFFFFFFUL, 8).campo_hexa(0xAB, 2).campo_hexa(0x1F, 1);
+  linha.campo_hexa(0x123, 1);
+  TEST_ASSERT_TRUE(linha.fechar());
+  const char esperado[] = "$X,00000000,FFFFFFFF,AB,1F,123*";
+  TEST_ASSERT_EQUAL_STRING_LEN(esperado, linha.dados(), std::strlen(esperado));
+}
+
 int main() {
   UNITY_BEGIN();
   RUN_TEST(teste_aviso_do_exemplo);
@@ -276,5 +324,9 @@ int main() {
   RUN_TEST(teste_linha_invalida_conta_como_descartada);
   RUN_TEST(teste_acelerometro_do_exemplo);
   RUN_TEST(teste_maior_acelerometro_cabe);
+  RUN_TEST(teste_pids_do_exemplo);
+  RUN_TEST(teste_obd_do_exemplo);
+  RUN_TEST(teste_formatos_do_obd);
+  RUN_TEST(teste_campo_hexa);
   return UNITY_END();
 }

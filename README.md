@@ -28,6 +28,8 @@ Precisa do [PlatformIO](https://platformio.org/), pela extensão do VS Code ou p
 
 Para conferir as regras do núcleo (`CODING_STANDARDS.md`): `python ferramentas/checa_nucleo.py`.
 
+O simulador escreve na USB dele, em texto livre, o cenário em uso e um resumo a cada 5 s (pedidos, respondidos e erros de envio). Para ver: `pio device monitor`, com a USB do simulador.
+
 ## Ferramenta de bancada
 
 `ferramentas/bancada.py` lê a USB do ESP32 no notebook, mostra as linhas e confere o checksum, a `seq` e o `t` de cada uma. Ela também faz o papel da Pi: manda o `$H` com a hora do notebook ao ver um `$B` ou um `$S` com `ESPERA`, e depois a cada 60 s. Ao sair, mostra o resumo: linhas válidas, corrompidas e perdidas, a maior distância entre o `t` e a hora do notebook, o menor e o maior número de `$A` entre dois `$S`, e as médias de `ax`, `ay`, `az` e |a|.

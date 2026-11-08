@@ -30,6 +30,13 @@ void emitir_status(protocolo::Status status);
 void emitir_log(protocolo::Nivel nivel, const char *texto);
 // $A, com cada eixo em centésimos de m/s².
 void emitir_acelerometro(int32_t ax, int32_t ay, int32_t az);
+// $O, com o valor multiplicado por 10^casas.
+void emitir_obd(const char *campo, int64_t valor_escalado, uint8_t casas);
+// $P, com os três mapas de PIDs suportados.
+void emitir_pids(uint32_t mapa00, uint32_t mapa20, uint32_t mapa40);
+
+// A taxa do OBD em uso, pelo último $C válido: em décimos de pedido por segundo (125 é 12.5).
+uint16_t obd_hz_decimos();
 
 // Recebeu algum $H: o ESP32 está em ATIVO.
 bool ativo();

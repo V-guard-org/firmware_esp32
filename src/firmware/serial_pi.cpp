@@ -35,7 +35,7 @@ class BufferDeSaida final : public protocolo::Destino {
 BufferDeSaida buffer_de_saida;
 protocolo::Emissor emissor(buffer_de_saida);
 protocolo::Relogio relogio;
-uint16_t obd_hz_decimos = config::obd_hz_inicial_decimos;
+uint16_t obd_hz_em_uso = config::obd_hz_inicial_decimos;
 // Só a tarefa de leitura usa.
 protocolo::Leitor leitor;
 
@@ -109,7 +109,7 @@ void emitir_status(protocolo::Status status) {
   ComTrava com_trava;
   // Com a trava, o estado e o t saem da mesma leitura do relógio: nunca ESPERA com t.
   status.estado = relogio.acertado() ? protocolo::Estado::ativo : protocolo::Estado::espera;
-  status.obd_hz_decimos = obd_hz_decimos;
+  status.obd_hz_decimos = obd_hz_em_uso;
   emissor.emitir_status(relogio.t(agora_ms()), status);
 }
 
@@ -121,6 +121,21 @@ void emitir_log(protocolo::Nivel nivel, const char *texto) {
 void emitir_acelerometro(int32_t ax, int32_t ay, int32_t az) {
   ComTrava com_trava;
   emissor.emitir_acelerometro(relogio.t(agora_ms()), ax, ay, az);
+}
+
+void emitir_obd(const char *campo, int64_t valor_escalado, uint8_t casas) {
+  ComTrava com_trava;
+  emissor.emitir_obd(relogio.t(agora_ms()), campo, valor_escalado, casas);
+}
+
+void emitir_pids(uint32_t mapa00, uint32_t mapa20, uint32_t mapa40) {
+  ComTrava com_trava;
+  emissor.emitir_pids(relogio.t(agora_ms()), mapa00, mapa20, mapa40);
+}
+
+uint16_t obd_hz_decimos() {
+  ComTrava com_trava;
+  return obd_hz_em_uso;
 }
 
 bool ativo() {
@@ -143,7 +158,7 @@ void aplicar(const protocolo::Comando &comando) {
       break;
     case Tipo::taxa_obd: {
       ComTrava com_trava;
-      obd_hz_decimos = comando.obd_hz_decimos;
+      obd_hz_em_uso = comando.obd_hz_decimos;
       break;
     }
     case Tipo::taxa_invalida:

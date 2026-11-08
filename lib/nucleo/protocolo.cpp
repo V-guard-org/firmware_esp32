@@ -104,6 +104,21 @@ Linha &Linha::campo_decimal(int64_t valor_escalado, uint8_t casas) {
   return *this;
 }
 
+Linha &Linha::campo_hexa(uint32_t valor, uint8_t digitos) {
+  virgula();
+  // Um uint32_t tem até 8 dígitos hexa.
+  constexpr uint8_t maximo_digitos = 8;
+  uint8_t quantidade = maximo_digitos;
+  while (quantidade > 1 && quantidade > digitos && (valor >> (4 * (quantidade - 1))) == 0) {
+    --quantidade;
+  }
+  while (quantidade > 0) {
+    --quantidade;
+    acrescentar(digitos_hexa[(valor >> (4 * quantidade)) & 0x0F]);
+  }
+  return *this;
+}
+
 bool Linha::fechar() {
   if (fechada_) {
     return valida_;
@@ -227,6 +242,19 @@ void Emissor::emitir_log(uint64_t t, Nivel nivel, const char *texto) {
 void Emissor::emitir_acelerometro(uint64_t t, int32_t ax, int32_t ay, int32_t az) {
   Linha linha = comecar('A', t);
   linha.campo_decimal(ax, 2).campo_decimal(ay, 2).campo_decimal(az, 2);
+  emitir(linha);
+}
+
+void Emissor::emitir_obd(uint64_t t, const char *campo, int64_t valor_escalado, uint8_t casas) {
+  Linha linha = comecar('O', t);
+  linha.campo_texto(campo).campo_decimal(valor_escalado, casas);
+  emitir(linha);
+}
+
+void Emissor::emitir_pids(uint64_t t, uint32_t mapa00, uint32_t mapa20, uint32_t mapa40) {
+  constexpr uint8_t digitos = 8;
+  Linha linha = comecar('P', t);
+  linha.campo_hexa(mapa00, digitos).campo_hexa(mapa20, digitos).campo_hexa(mapa40, digitos);
   emitir(linha);
 }
 
