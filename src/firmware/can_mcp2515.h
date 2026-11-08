@@ -15,8 +15,9 @@ namespace vguard::can_mcp2515 {
 // toca no MCP2515.
 void preparar();
 
-// Ao entrar em ATIVO: inicia o MCP2515 em só escuta, sem filtros e com envio único. Em só escuta,
-// ele não transmite nem confirma (ACK) os quadros. Devolve false se ele não respondeu.
+// Ao entrar em ATIVO, e de novo quando o OBD para: inicia o MCP2515 em só escuta, sem filtros e
+// com envio único, o que zera os contadores de erro. Em só escuta, ele não transmite nem confirma
+// (ACK) os quadros. Devolve false se ele não respondeu.
 bool iniciar_escuta();
 
 // Antes da descoberta: inicia de novo, com as máscaras e os 6 filtros aceitando só 0x7E8, e passa
@@ -29,5 +30,9 @@ bool enviar(uint16_t id, const uint8_t (&dados)[8]);
 
 // Lê um quadro recebido, se houver.
 bool receber(obd::Quadro &quadro);
+
+// O MCP2515 acusa erro passivo (na transmissão ou na recepção) ou bus-off, pelo registrador EFLG,
+// como o voyage_painel.ino (getError() & 0x38).
+bool erro_no_barramento();
 
 }  // namespace vguard::can_mcp2515

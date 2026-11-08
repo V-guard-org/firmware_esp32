@@ -27,6 +27,14 @@ constexpr uint16_t id_resposta = 0x7E8;
 constexpr uint32_t tempo_limite_ms = 1200;
 // A descoberta só começa com tráfego no CAN nos últimos 2 s.
 constexpr uint32_t trafego_recente_ms = 2000;
+// Regras de falha do voyage_painel.ino (proposta §4.3): um PID que falha 3 vezes fica suspenso
+// até a próxima descoberta; 3 pedidos seguidos sem resposta fazem parar; depois de parar, uma
+// nova descoberta a cada 15 s, contados da parada.
+constexpr uint8_t falhas_para_suspender = 3;
+constexpr uint8_t falhas_seguidas_para_parar = 3;
+constexpr uint32_t intervalo_tentativas_ms = 15000;
+// O "aguarde" (03 7F 01 78): a central pede mais tempo. Não conta como falha.
+constexpr uint8_t codigo_aguarde = 0x78;
 // O CAN é lido a cada 10 ms. Um atraso menor que isso é só o da leitura, e a agenda dos pedidos
 // segue; um atraso maior é da central, e a agenda recomeça do envio.
 constexpr uint32_t folga_da_agenda_ms = 10;
@@ -53,6 +61,18 @@ constexpr bool resposta_positiva(uint32_t id, uint8_t dlc, const uint8_t *d, uin
     return false;
   }
   bytes = d[0] - 2;
+  return true;
+}
+
+// Resposta negativa do serviço 01 (03 7F 01 <código>), como o tratarResposta() do
+// voyage_painel.ino a reconhece. Ela não traz o PID: vale para o pedido em andamento. O código
+// 0x78 é o "aguarde"; os outros são recusa.
+constexpr bool resposta_negativa(uint32_t id, uint8_t dlc, const uint8_t *d, uint32_t central,
+                                 uint8_t &codigo) {
+  if (id != central || dlc < 4 || dlc > 8 || d[0] != 3 || d[1] != 0x7F || d[2] != 1) {
+    return false;
+  }
+  codigo = d[3];
   return true;
 }
 
@@ -135,13 +155,19 @@ struct Quadro {
 class Saida {
  public:
   // Antes da descoberta: o MCP2515 sai do só escuta para o modo normal, aceitando só 0x7E8.
-  virtual void configurar_leitura() = 0;
+  // Devolve false se ele não respondeu.
+  virtual bool configurar_leitura() = 0;
+  // Ao parar: o MCP2515 é iniciado de novo em só escuta, sem filtros, o que zera os erros do CAN.
+  // Devolve false se ele não respondeu.
+  virtual bool voltar_a_escutar() = 0;
   // Manda um pedido, com envio único e DLC 8.
   virtual void enviar(uint16_t id, const uint8_t (&dados)[8]) = 0;
   // $O,<seq>,<t>,<campo>,<valor>, com o valor já escalado pelas casas.
   virtual void emitir_obd(const char *campo, int64_t valor_escalado, uint8_t casas) = 0;
   // $P,<seq>,<t>,<mapa00>,<mapa20>,<mapa40>, depois de cada descoberta.
   virtual void emitir_pids(uint32_t mapa00, uint32_t mapa20, uint32_t mapa40) = 0;
+  // $L,<seq>,<t>,AVISO,<texto>: um PID suspenso ou a leitura que parou.
+  virtual void emitir_aviso(const char *texto) = 0;
 
  protected:
   ~Saida() = default;
@@ -153,11 +179,28 @@ class Saida {
 // - DESCOBRINDO: pede os mapas 00 (a 0x7DF), 20 e 40 (a 0x7E0), enquanto cada um anuncia o
 //   seguinte. No fim, emite o $P;
 // - LENDO: pede os PIDs de interesse que o carro suporta, em rodízio, e emite um $O a cada
-//   resposta.
+//   resposta;
+// - SEM_RESPOSTA: parou, e há tráfego no CAN nos últimos 2 s. Depois de parar, o obd é
+//   SEM_RESPOSTA ou ESCUTANDO conforme o tráfego, e a nova descoberta sai 15 s depois da parada,
+//   com tráfego visto desde ela;
+// - FALHA: o MCP2515 não voltou a só escuta. Fica assim até o próximo boot.
 // Um pedido por vez, no ritmo da taxa do $C, por uma agenda fixa: o próximo é marcado a partir do
 // horário planejado do anterior. Se a resposta atrasa, o próximo espera por ela, e a agenda
-// recomeça do envio. Com o tempo limite (1200 ms) esgotado, na leitura passa ao próximo PID; na
-// descoberta, pede o mesmo mapa de novo. As regras de falha vêm no #7.
+// recomeça do envio.
+//
+// Falhas, como no voyage_painel.ino (proposta §4.3): o tempo limite (1200 ms) esgotado e a
+// recusa contam; o "aguarde" não, e o pedido segue esperando até o tempo limite.
+// - Na leitura, cada falha conta para o PID, e uma resposta positiva dele zera a conta. Com 3, ele
+//   fica suspenso até a próxima descoberta. Sem nenhum PID ativo, para.
+// - As falhas seguidas, de qualquer PID, também contam, e qualquer resposta positiva zera a conta.
+//   Com 3, para, mas só quando a 3ª é um pedido sem resposta: a recusa entra na conta e não para.
+// - Na descoberta, a falha do mapa 00 faz parar; a do 20 ou do 40 encerra a descoberta com o que
+//   já se sabe.
+// - Para também com erro no CAN (erro passivo ou bus-off) e quando o MCP2515 não aceita os filtros.
+// Os avisos: "PID 0F sem resposta" ou "PID 0F recusado" ao suspender, e "OBD sem resposta", "OBD
+// erro no CAN" ou "OBD sem PID ativo" ao parar. O aviso de parada sai um por episódio: as novas
+// tentativas que falham não o repetem, e a próxima descoberta que dá certo (o $P) encerra o
+// episódio.
 class Maquina {
  public:
   explicit Maquina(Saida &saida) : saida_(saida) {}
@@ -166,18 +209,31 @@ class Maquina {
   void comecar(uint32_t agora);
   // Chegou um quadro do CAN.
   void receber(const Quadro &quadro, uint32_t agora);
+  // O MCP2515 acusou erro passivo ou bus-off. Só vale enquanto pede (pedindo()).
+  void erro_no_can(uint32_t agora);
   // A cada 10 ms. obd_hz_decimos: a taxa do $C, em décimos de pedido por segundo.
   void tique(uint32_t agora, uint16_t obd_hz_decimos);
 
-  // O obd do $S: PARADO antes do comecar(), depois ESCUTANDO, DESCOBRINDO ou LENDO.
+  // O obd do $S: PARADO antes do comecar(), depois ESCUTANDO, DESCOBRINDO, LENDO, SEM_RESPOSTA
+  // ou FALHA.
   protocolo::EstadoObd estado() const { return estado_; }
+  // Descobrindo ou lendo: o MCP2515 está no modo normal, e o erro no CAN conta.
+  bool pedindo() const;
 
  private:
+  enum class Falha : uint8_t { sem_resposta, recusa };
+  enum class Motivo : uint8_t { sem_resposta, erro_no_can, sem_pid_ativo };
+
   void comecar_descoberta(uint32_t agora);
   void pedir(uint8_t pid, uint32_t agora, uint16_t obd_hz_decimos);
+  bool pedir_proximo_pid(uint32_t agora, uint16_t obd_hz_decimos);
   void responder_mapa(const uint8_t *dados_do_mapa);
   void terminar_descoberta();
   void marcar_proximo(uint32_t agora, uint16_t obd_hz_decimos);
+  void falhar(Falha falha, uint32_t agora);
+  void parar(Motivo motivo, uint32_t agora);
+  void avisar_pid_suspenso(uint8_t pid, Falha falha);
+  bool trafego_recente(uint32_t agora) const;
 
   Saida &saida_;
   protocolo::EstadoObd estado_ = protocolo::EstadoObd::parado;
@@ -185,9 +241,18 @@ class Maquina {
   bool viu_trafego_ = false;
   uint32_t ultimo_trafego_ = 0;
 
-  // O pedido em andamento.
+  // A última parada: as novas descobertas saem a cada 15 s contados dela.
+  bool parou_ = false;
+  uint32_t parou_em_ = 0;
+  // O aviso de parada deste episódio já saiu.
+  bool avisou_parada_ = false;
+  // Falhas seguidas, de qualquer PID.
+  uint8_t falhas_seguidas_ = 0;
+
+  // O pedido em andamento, e na leitura o índice dele em `campos`.
   bool aguardando_ = false;
   uint8_t pendente_ = 0;
+  uint8_t campo_pendente_ = 0;
   uint32_t enviado_em_ = 0;
 
   // A agenda: o próximo pedido sai em proximo_ms_ e mais fracao_us_.
@@ -202,6 +267,10 @@ class Maquina {
   uint8_t ativos_[quantidade_campos] = {};
   uint8_t quantidade_ativos_ = 0;
   uint8_t proximo_ativo_ = 0;
+  // Por índice em `campos`: as falhas do PID desde a última resposta positiva dele, e se ele
+  // está suspenso até a próxima descoberta.
+  uint8_t falhas_[quantidade_campos] = {};
+  bool suspenso_[quantidade_campos] = {};
 };
 
 }  // namespace vguard::obd

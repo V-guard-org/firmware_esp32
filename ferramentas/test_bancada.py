@@ -4,7 +4,8 @@
 """
 import unittest
 
-from bancada import Conferencia, PapelDaPi, Valida, checksum, enmoldurar, ler_linha
+from bancada import (Conferencia, PapelDaPi, Valida, checksum, enmoldurar, ler_linha,
+                     rara_ou_problema)
 
 
 def moldura(corpo: str) -> bytes:
@@ -23,8 +24,9 @@ def ativo(seq: int, uptime: int, t: int) -> bytes:
     return moldura(f"S,{seq},{t},{uptime},ATIVO,PARADO,FALHA,AUSENTE,0,12.5,0")
 
 
-def ativo_com(seq: int, uptime: int, imu: str = "OK", descartadas: int = 0) -> bytes:
-    return moldura(f"S,{seq},{HORA},{uptime},ATIVO,PARADO,{imu},AUSENTE,0,12.5,{descartadas}")
+def ativo_com(seq: int, uptime: int, imu: str = "OK", descartadas: int = 0,
+              obd: str = "PARADO") -> bytes:
+    return moldura(f"S,{seq},{HORA},{uptime},ATIVO,{obd},{imu},AUSENTE,0,12.5,{descartadas}")
 
 
 def acel(seq: int, ax: str = "0.12", ay: str = "-0.05", az: str = "9.79", t: int = 0) -> bytes:
@@ -218,6 +220,24 @@ class TestConferenciaDoAcelerometro(unittest.TestCase):
     def test_imu_aparece_no_primeiro_status(self):
         _, mensagens = self.conferir([boot(), status(1, 0)])
         self.assertIn("-- imu: FALHA", mensagens)
+
+
+class TestMudancaDoObd(unittest.TestCase):
+    """A mudança do obd do $S, para os cenários do simulador (#7)."""
+
+    def test_mostra_cada_mudanca_uma_vez(self):
+        conferencia = Conferencia(conferir_taxa_do_a=False)
+        mensagens = []
+        for seq, obd in enumerate(["ESCUTANDO", "LENDO", "LENDO", "SEM_RESPOSTA", "DESCOBRINDO",
+                                   "SEM_RESPOSTA", "ESCUTANDO"]):
+            mensagens += conferencia.linha(ativo_com(seq, seq, obd=obd))
+        mudancas = [m for m in mensagens if m.startswith("-- obd")]
+        self.assertEqual(["-- obd: ESCUTANDO", "-- obd: ESCUTANDO → LENDO",
+                          "-- obd: LENDO → SEM_RESPOSTA", "-- obd: SEM_RESPOSTA → DESCOBRINDO",
+                          "-- obd: DESCOBRINDO → SEM_RESPOSTA",
+                          "-- obd: SEM_RESPOSTA → ESCUTANDO"], mudancas)
+        self.assertTrue(all(rara_ou_problema(m) for m in mudancas))
+        self.assertFalse(conferencia.falhou())
 
 
 class TestEnmoldurar(unittest.TestCase):

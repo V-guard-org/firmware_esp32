@@ -71,4 +71,8 @@ bool receber(obd::Quadro &quadro) {
   return true;
 }
 
+bool erro_no_barramento() {
+  return (controlador.getError() & (MCP_EFLG_TXBO | MCP_EFLG_TXEP | MCP_EFLG_RXEP)) != 0;
+}
+
 }  // namespace vguard::can_mcp2515
