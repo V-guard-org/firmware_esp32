@@ -32,7 +32,14 @@ O que conta como problema:
 - fora de ordem: a seq andou para trás sem voltar a 0;
 - fora da hora: o t da linha a mais de 1 s da hora do notebook na chegada (o t 0, sem hora, não
   conta);
-- continua em ESPERA: um $S com ESPERA mais de 3 s depois de um $H mandado pela ferramenta.
+- continua em ESPERA: um $S com ESPERA mais de 3 s depois de um $H mandado pela ferramenta;
+- taxa do $A: entre dois $S seguidos em ATIVO, menos de 49 ou mais de 51 $A. --sem-imu não
+  confere, para as bancadas sem o ADXL345 ligado;
+- descartadas: o campo descartadas do $S passou de 0 (linhas que não couberam na saída do
+  ESP32).
+
+Também aparecem, no modo com tempo, a mudança do imu do $S e a pausa e a volta do $A (um
+intervalo entre dois $S em ATIVO sem nenhum $A). O resumo traz as médias de ax, ay, az e |a|.
 
 A seq voltar a 0 é reinício do ESP32, não lacuna. O texto que a ROM imprime no boot, e a linha
 cortada pelo reinício, chegam antes do $B com seq 0 e são ignorados sem contar como corrompidos.
@@ -56,6 +63,10 @@ TIPOS_RAROS = {"B", "L", "P"}
 DISTANCIA_MAXIMA_MS = 1000
 # Depois de um $H, o ESP32 tem até 3 s para o $S sair de ESPERA.
 PRAZO_PARA_ATIVO_MS = 3000
+# Entre dois $S em ATIVO (1 s), 50 $A, com 1 de folga pela fase entre as duas tarefas (#4).
+A_POR_STATUS = range(49, 52)
+# Campos do $S: $S,<seq>,<t>,<uptime_s>,<estado>,<obd>,<imu>,<sd>,<sd_livre>,<obd_hz>,<descartadas>
+CAMPOS_DO_STATUS = 11
 
 
 def checksum(texto: bytes) -> int:
@@ -109,7 +120,9 @@ class Conferencia:
     """Conta as linhas do ESP32 e acha os problemas. Não sabe nada da porta: recebe as linhas
     já separadas pelo \\n, e devolve o que mostrar."""
 
-    def __init__(self):
+    def __init__(self, conferir_taxa_do_a: bool = True):
+        # Sem o ADXL345 ligado (--sem-imu), não chega $A, e a taxa não é conferida.
+        self.conferir_taxa_do_a = conferir_taxa_do_a
         self.validas = 0
         self.corrompidas = 0
         self.perdidas = 0
@@ -121,6 +134,15 @@ class Conferencia:
         self.horas_enviadas = 0
         self.fora_da_hora = 0
         self.esperas = 0
+        # Intervalos entre dois $S em ATIVO com o $A fora de 49 a 51, e o menor e o maior.
+        self.fora_da_taxa = 0
+        self.menor_a_por_status: int | None = None
+        self.maior_a_por_status: int | None = None
+        # Linhas que o ESP32 descartou durante a captura, pelo campo descartadas do $S.
+        self.descartadas = 0
+        # Somas do $A, para as médias: ax, ay, az e |a|.
+        self.quantidade_a = 0
+        self._somas_a = [0.0, 0.0, 0.0, 0.0]
         # Maior distância entre o t e a hora do notebook, em ms, com o sinal.
         self.maior_distancia_ms: int | None = None
         # A última linha válida, ou None se a última foi recusada.
@@ -130,6 +152,11 @@ class Conferencia:
         self._hora_enviada_em: int | None = None
         self._avisou_espera = False
         self._ultimo_uptime: int | None = None
+        self._a_desde_o_status = 0
+        self._ultimo_estado: str | None = None
+        self._ultimo_imu: str | None = None
+        self._ultimas_descartadas = 0
+        self._a_parado = False
         # Linhas recusadas esperando a próxima válida: se ela for um reinício (seq 0), eram o
         # boot; se não, eram corrompidas.
         self._pendentes: list[tuple[bytes, str]] = []
@@ -174,11 +201,26 @@ class Conferencia:
                 else f"{self.maior_distancia_ms:+d} ms"),
             f"  linhas com o t a mais de 1 s do notebook: {self.fora_da_hora}",
             f"  $S em ESPERA mais de 3 s depois do $H: {self.esperas}",
+            "  $A entre dois $S em ATIVO: " + (
+                "não conferido (--sem-imu)" if not self.conferir_taxa_do_a
+                else "nenhum intervalo para comparar" if self.menor_a_por_status is None
+                else f"de {self.menor_a_por_status} a {self.maior_a_por_status}"
+                     f" (fora de 49 a 51: {self.fora_da_taxa})"),
+            f"  descartadas no ESP32: {self.descartadas}",
+            "  médias do $A: " + self._medias_a(),
         ])
+
+    def _medias_a(self) -> str:
+        if self.quantidade_a == 0:
+            return "nenhum $A"
+        ax, ay, az, modulo = (soma / self.quantidade_a for soma in self._somas_a)
+        return (f"ax {ax:+.2f}, ay {ay:+.2f}, az {az:+.2f}, |a| {modulo:.2f} m/s²"
+                f" ({self.quantidade_a} linhas)")
 
     def falhou(self) -> bool:
         return (self.corrompidas > 0 or self.perdidas > 0 or self.fora_de_ordem > 0
-                or self.fora_da_hora > 0 or self.esperas > 0 or self.validas == 0)
+                or self.fora_da_hora > 0 or self.esperas > 0 or self.fora_da_taxa > 0
+                or self.descartadas > 0 or self.validas == 0)
 
     def _valida(self, linha: Valida, bruta: bytes, hora_ms: int | None) -> list[str]:
         mensagens = []
@@ -194,6 +236,8 @@ class Conferencia:
         if reinicio:
             self.reinicios += 1
             self._ultimo_uptime = None
+            self._ultimo_estado = None
+            self._ultimas_descartadas = 0
             mensagens.append("-- reinício do ESP32: a seq voltou a 0")
         elif self._ultima_seq is not None:
             esperada = (self._ultima_seq + 1) & 0xFFFFFFFF
@@ -215,6 +259,10 @@ class Conferencia:
                 self.saltos_uptime += 1
                 mensagens.append(f"!! uptime_s saltou de {self._ultimo_uptime} para {uptime}")
             self._ultimo_uptime = uptime
+        if linha.tipo == "A":
+            mensagens += self._acelerometro(linha)
+        elif linha.tipo == "S" and len(linha.campos) == CAMPOS_DO_STATUS:
+            mensagens += self._status_do_acelerometro(linha)
         if hora_ms is not None:
             mensagens += self._conferir_hora(linha, hora_ms)
         mensagens.append(bruta.decode("ascii", errors="replace").rstrip("\r"))
@@ -240,6 +288,58 @@ class Conferencia:
             mensagens.append("!! continua em ESPERA mais de 3 s depois do $H")
         return mensagens
 
+
+    def _acelerometro(self, linha: Valida) -> list[str]:
+        """$A,<seq>,<t>,<ax>,<ay>,<az>: conta para a taxa e soma para as médias."""
+        mensagens = []
+        self._a_desde_o_status += 1
+        if self._a_parado:
+            self._a_parado = False
+            mensagens.append("-- o $A voltou")
+        try:
+            ax, ay, az = (float(campo) for campo in linha.campos[3:6])
+        except ValueError:
+            return mensagens
+        if len(linha.campos) == 6:
+            self.quantidade_a += 1
+            for i, valor in enumerate((ax, ay, az, (ax * ax + ay * ay + az * az) ** 0.5)):
+                self._somas_a[i] += valor
+        return mensagens
+
+    def _status_do_acelerometro(self, linha: Valida) -> list[str]:
+        """No $S: a mudança do imu, as descartadas e a quantidade de $A desde o $S anterior."""
+        mensagens = []
+        estado, imu, descartadas = linha.campos[4], linha.campos[6], linha.campos[10]
+        if imu != self._ultimo_imu:
+            mensagens.append(f"-- imu: {imu}" if self._ultimo_imu is None
+                             else f"-- imu: {self._ultimo_imu} → {imu}")
+            self._ultimo_imu = imu
+        if descartadas.isdigit():
+            if int(descartadas) > self._ultimas_descartadas:
+                self.descartadas += int(descartadas) - self._ultimas_descartadas
+                mensagens.append(f"!! o ESP32 descartou linhas: descartadas {descartadas}")
+            self._ultimas_descartadas = int(descartadas)
+        if self.conferir_taxa_do_a and self._ultimo_estado == "ATIVO" and estado == "ATIVO":
+            mensagens += self._taxa_do_acelerometro(self._a_desde_o_status)
+        self._ultimo_estado = estado
+        self._a_desde_o_status = 0
+        return mensagens
+
+    def _taxa_do_acelerometro(self, quantidade: int) -> list[str]:
+        if self.menor_a_por_status is None or quantidade < self.menor_a_por_status:
+            self.menor_a_por_status = quantidade
+        if self.maior_a_por_status is None or quantidade > self.maior_a_por_status:
+            self.maior_a_por_status = quantidade
+        if quantidade in A_POR_STATUS:
+            return []
+        self.fora_da_taxa += 1
+        if quantidade > 0:
+            return [f"!! {quantidade} $A entre dois $S (o certo é de 49 a 51)"]
+        # Parado, avisa uma vez só, e não a cada segundo.
+        if self._a_parado:
+            return []
+        self._a_parado = True
+        return ["-- o $A parou: nenhum $A entre dois $S"]
 
     def _ignorar_pendentes(self) -> list[str]:
         mensagens = [f"   (fora do protocolo) {mostrar(bruta)}" for bruta, _ in self._pendentes]
@@ -355,6 +455,8 @@ def main() -> int:
                             help="reinicia o ESP32 pelo EN ao abrir a porta, para pegar o $B")
     argumentos.add_argument("--sem-hora", action="store_true",
                             help="não manda o $H, para ver o ESP32 em ESPERA")
+    argumentos.add_argument("--sem-imu", action="store_true",
+                            help="não confere a taxa do $A, para a bancada sem o ADXL345 ligado")
     argumentos.add_argument("--enviar", action="append", default=[], metavar="LINHA",
                             help="manda a linha (C,obd_hz,15) com a moldura; repetível, com 2 s "
                                  "de intervalo a partir da primeira linha válida")
@@ -371,7 +473,7 @@ def main() -> int:
     print(f"Lendo {nome_porta} a {BAUD} baud" +
           (f" por {args.segundos:g} s" if args.segundos else ", Ctrl+C para sair") + ".")
 
-    conferencia = Conferencia()
+    conferencia = Conferencia(conferir_taxa_do_a=not args.sem_imu)
     pi = PapelDaPi(mandar_hora=not args.sem_hora, enviar=args.enviar)
     teclado: queue.Queue = queue.Queue()
     threading.Thread(target=ler_teclado, args=(teclado,), daemon=True).start()

@@ -118,6 +118,16 @@ void emitir_log(protocolo::Nivel nivel, const char *texto) {
   emissor.emitir_log(relogio.t(agora_ms()), nivel, texto);
 }
 
+void emitir_acelerometro(int32_t ax, int32_t ay, int32_t az) {
+  ComTrava com_trava;
+  emissor.emitir_acelerometro(relogio.t(agora_ms()), ax, ay, az);
+}
+
+bool ativo() {
+  ComTrava com_trava;
+  return relogio.acertado();
+}
+
 namespace {
 
 void aplicar(const protocolo::Comando &comando) {

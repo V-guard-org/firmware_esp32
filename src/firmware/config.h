@@ -55,6 +55,25 @@ constexpr uint16_t obd_hz_inicial_decimos = 125;
 // Período do $S (proposta §5.3).
 constexpr uint32_t periodo_status_ms = 1000;
 
+// I²C do ADXL345 (proposta §4.4): 400 kHz. Cada leitura ou escrita espera no máximo este tempo;
+// a leitura dos 3 eixos leva ~0,3 ms.
+constexpr uint32_t imu_i2c_hz = 400000;
+constexpr uint32_t imu_i2c_espera_ms = 10;
+
+// A tarefa de aquisição (proposta §4.6): prioridade alta, acima da serial, no núcleo 1, o do
+// loop(). A gravação do SD vai para o núcleo 0.
+constexpr uint32_t aquisicao_pilha = 4096;
+constexpr unsigned aquisicao_prioridade = 5;
+constexpr int aquisicao_nucleo = 1;
+// Uma leitura do ADXL345 a cada 10 ms (100 Hz), pelo relógio do ESP32. O $A sai em uma de cada
+// duas.
+constexpr uint32_t aquisicao_periodo_ms = 10;
+// Com o sensor fora, uma tentativa de falar com ele a cada 1 s, só em ATIVO (proposta §4.4).
+constexpr uint32_t imu_intervalo_tentativas_ms = 1000;
+// Depois do POWER_CTL, a primeira amostra leva 1,1 ms mais um período de 10 ms. Antes disso, os
+// registradores ainda têm zero, ou a amostra de antes do reinício.
+constexpr uint32_t imu_espera_primeira_amostra_ms = 20;
+
 }  // namespace config
 
 }  // namespace vguard

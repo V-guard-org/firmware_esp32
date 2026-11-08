@@ -1,6 +1,6 @@
 // Protocolo da serial ESP32 ↔ Pi (proposta §5): a moldura $<tipo>,<campos...>*<hh>, o
-// checksum, as linhas que o ESP32 manda e as que a Pi manda ($H e $C). Só memória de tamanho
-// fixo.
+// checksum, as linhas que o ESP32 manda ($B, $S, $L e $A) e as que a Pi manda ($H e $C). Só
+// memória de tamanho fixo.
 #pragma once
 
 #include <cstddef>
@@ -123,6 +123,8 @@ class Emissor {
   // $L,<seq>,<t>,<nivel>,<texto>. O texto pode ter espaços e é cortado em 60 caracteres; com
   // $, * ou quebra de linha, a linha é descartada.
   void emitir_log(uint64_t t, Nivel nivel, const char *texto);
+  // $A,<seq>,<t>,<ax>,<ay>,<az>, com cada eixo em centésimos de m/s²: 979 sai como 9.79.
+  void emitir_acelerometro(uint64_t t, int32_t ax, int32_t ay, int32_t az);
 
   // Linhas que não couberam no destino desde o boot.
   uint32_t descartadas() const { return descartadas_; }

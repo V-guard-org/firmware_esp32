@@ -28,5 +28,10 @@ void emitir_boot(protocolo::MotivoReset motivo);
 void emitir_status(protocolo::Status status);
 // $L.
 void emitir_log(protocolo::Nivel nivel, const char *texto);
+// $A, com cada eixo em centésimos de m/s².
+void emitir_acelerometro(int32_t ax, int32_t ay, int32_t az);
+
+// Recebeu algum $H: o ESP32 está em ATIVO.
+bool ativo();
 
 }  // namespace vguard::serial_pi
