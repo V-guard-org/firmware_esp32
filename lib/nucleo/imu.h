@@ -32,6 +32,13 @@ struct Leitura {
   int16_t z;
 };
 
+// A leitura é 0 nos três eixos: o sensor não está medindo. Com a gravidade, um sensor medindo
+// nunca dá isso. É o que se lê depois de o ADXL345 reiniciar sozinho (uma queda de tensão na
+// partida do motor, por exemplo): ele volta em espera, com os registradores zerados (#21).
+inline bool sem_medida(const Leitura &leitura) {
+  return leitura.x == 0 && leitura.y == 0 && leitura.z == 0;
+}
+
 // Aceleração dos três eixos, em m/s².
 struct Aceleracao {
   float x;

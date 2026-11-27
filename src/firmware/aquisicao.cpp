@@ -61,12 +61,21 @@ bool conferir() {
 }
 
 // Destrava o barramento e inicia o sensor. Faz a conferência se ela ainda não foi feita, e o
-// filtro recomeça na próxima leitura. Devolve false se o sensor não respondeu.
+// filtro recomeça na próxima leitura. Devolve false se o sensor não respondeu, ou se respondeu
+// mas não está medindo: 0 nos três eixos depois da primeira amostra (#21).
 bool religar() {
   if (!acelerometro::iniciar()) {
     return false;
   }
-  if (!conferencia_feita && !conferir()) {
+  if (!conferencia_feita) {
+    if (!conferir()) {
+      return false;
+    }
+  } else {
+    vTaskDelay(ticks(config::imu_espera_primeira_amostra_ms));
+  }
+  imu::Leitura leitura;
+  if (!acelerometro::ler(leitura) || imu::sem_medida(leitura)) {
     return false;
   }
   tratamento.recomecar();
@@ -98,9 +107,9 @@ bool ciclo_do_imu() {
     return true;
   }
   imu::Leitura leitura;
-  if (!acelerometro::ler(leitura)) {
-    // Erro de leitura: destrava e inicia de novo, na hora. Se voltar, só se perdem estas
-    // leituras, sem aviso.
+  if (!acelerometro::ler(leitura) || imu::sem_medida(leitura)) {
+    // Erro de leitura, ou o sensor reiniciou sozinho e voltou em espera (0 nos três eixos):
+    // destrava e inicia de novo, na hora. Se voltar, só se perdem estas leituras, sem aviso.
     if (!religar()) {
       respondendo = false;
       ultima_tentativa = xTaskGetTickCount();
@@ -181,11 +190,23 @@ void tarefa(void *) {
   }
   ultima_tentativa = xTaskGetTickCount();
   TickType_t despertar = xTaskGetTickCount();
+  bool estava_ativo = false;
   for (;;) {
     vTaskDelayUntil(&despertar, ticks(config::aquisicao_periodo_ms));
     // Em ESPERA, nem o CAN nem o sensor são lidos.
     if (!serial_pi::ativo()) {
       continue;
+    }
+    if (!estava_ativo) {
+      // Ao entrar em ATIVO, o sensor é iniciado de novo: na espera pelo $H (até 120 s), uma
+      // queda de tensão na partida do motor pode tê-lo reiniciado em espera (#21).
+      estava_ativo = true;
+      if (respondendo && !religar()) {
+        respondendo = false;
+        serial_pi::emitir_log(Nivel::erro, "IMU sem resposta");
+      }
+      ultima_tentativa = xTaskGetTickCount();
+      despertar = xTaskGetTickCount();
     }
     ciclo_do_obd();
     if (ciclo_do_imu()) {

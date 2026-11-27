@@ -161,6 +161,14 @@ static void teste_offset_vale_no_tratamento() {
   TEST_ASSERT_FLOAT_WITHIN(1e-3f, 256 * lsb - 0.5f, saida.z);
 }
 
+static void teste_sem_medida_so_com_os_tres_eixos_em_0() {
+  TEST_ASSERT_TRUE(sem_medida(Leitura{0, 0, 0}));
+  // Parado, deitado: 1 g em z (~256 LSB). Um eixo em 0 sozinho é normal.
+  TEST_ASSERT_FALSE(sem_medida(Leitura{0, 0, 256}));
+  TEST_ASSERT_FALSE(sem_medida(Leitura{1, 0, 0}));
+  TEST_ASSERT_FALSE(sem_medida(Leitura{0, -1, 0}));
+}
+
 int main() {
   UNITY_BEGIN();
   RUN_TEST(teste_alfa_corta_em_5_hz);
@@ -178,5 +186,6 @@ int main() {
   RUN_TEST(teste_vibracao_rapida_cai);
   RUN_TEST(teste_recomecar_esquece_o_filtro);
   RUN_TEST(teste_offset_vale_no_tratamento);
+  RUN_TEST(teste_sem_medida_so_com_os_tres_eixos_em_0);
   return UNITY_END();
 }
