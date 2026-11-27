@@ -1,6 +1,6 @@
 // O barramento CAN do OBD, visto pela tarefa de aquisição. Duas implementações, uma por ambiente:
-// - can_mcp2515.cpp (esp32): o MCP2515 no 1º SPI (proposta §4.3 e §4.6), SCK 18, MISO 19,
-//   MOSI 23, CS 25, cristal de 8 MHz, 500 kbit/s, IDs de 11 bits, em volta do mcp_can 1.5.1,
+// - can_mcp2515.cpp (esp32): o MCP2515 no 1º SPI (proposta §4.3), SCK 14, MISO 12, MOSI 13,
+//   CS 15 (a placa soldada, config.h), cristal de 8 MHz, 500 kbit/s, IDs de 11 bits, em volta do mcp_can 1.5.1,
 //   como no iniciarControlador() do voyage_painel.ino (repositório OBD-II);
 // - can_simulado.cpp (esp32-sim): a central simulada do núcleo, sem CAN (proposta §4.7, #17).
 //

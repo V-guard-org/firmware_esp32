@@ -12,17 +12,23 @@ constexpr const char *versao_firmware = VGUARD_VERSAO_FIRMWARE;
 
 namespace pinos {
 
-// MCP2515, no 1º SPI (VSPI), onde o guia de ligações v3 manda.
-constexpr uint8_t can_sck = 18;
-constexpr uint8_t can_miso = 19;
-constexpr uint8_t can_mosi = 23;
-constexpr uint8_t can_cs = 25;
+// Os pinos da placa soldada pelo Nicolas (can_sd_adxl_soldado.ino, no ramo
+// Nicolas-leitorCanSdAdxlESP32 do firmware_telemetria), e não os da §4.6 da proposta. Os
+// barramentos são os mesmos de antes, pela matriz de GPIO.
 
-// microSD, no 2º SPI (HSPI), pela matriz de GPIO. Nenhum destes tem função no boot.
-constexpr uint8_t sd_sck = 27;
-constexpr uint8_t sd_miso = 32;
-constexpr uint8_t sd_mosi = 33;
-constexpr uint8_t sd_cs = 26;
+// MCP2515, no 1º SPI (VSPI). O GPIO12 (MISO) decide a tensão da memória flash no boot: em nível
+// alto ao ligar, o ESP32 não inicia. O GPIO15 (CS) também é de boot e precisa estar em nível
+// alto, o repouso do CS.
+constexpr uint8_t can_sck = 14;
+constexpr uint8_t can_miso = 12;
+constexpr uint8_t can_mosi = 13;
+constexpr uint8_t can_cs = 15;
+
+// microSD, no 2º SPI (HSPI). O GPIO5 (CS) também é de boot e precisa estar em nível alto.
+constexpr uint8_t sd_sck = 18;
+constexpr uint8_t sd_miso = 19;
+constexpr uint8_t sd_mosi = 23;
+constexpr uint8_t sd_cs = 5;
 
 // ADXL345, no I²C.
 constexpr uint8_t imu_sda = 21;

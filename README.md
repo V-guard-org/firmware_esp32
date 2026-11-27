@@ -10,9 +10,11 @@ Placa: ESP32 clássico de 30 pinos, do tipo DevKit V1 (`board = esp32dev`).
 
 | Peça | Barramento | Pinos |
 |---|---|---|
-| MCP2515 + TJA1050 | 1º SPI (VSPI) | SCK 18, MISO 19, MOSI 23, CS 25 |
-| microSD | 2º SPI (HSPI) | SCK 27, MISO 32, MOSI 33, CS 26 |
+| MCP2515 + TJA1050 | 1º SPI (VSPI) | SCK 14, MISO 12, MOSI 13, CS 15 |
+| microSD | 2º SPI (HSPI) | SCK 18, MISO 19, MOSI 23, CS 5 |
 | ADXL345 | I²C, endereço 0x53 | SDA 21, SCL 22 |
+
+Os pinos são os da placa soldada pelo Nicolas, e não os da §4.6 da proposta. O GPIO12 decide a tensão da memória flash no boot: em nível alto ao ligar, o ESP32 não inicia.
 
 No código, os pinos estão em `src/firmware/config.h`.
 
