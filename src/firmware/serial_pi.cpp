@@ -67,6 +67,17 @@ void tarefa_escrita(void *) {
 
 void aplicar(const protocolo::Comando &comando);
 
+// Sem $H até o prazo, entra no modo autônomo e avisa uma vez (proposta §4.2, #21). A mesma
+// trava do $H: um $H que chegue junto com o prazo sempre prevalece.
+void conferir_prazo_da_hora() {
+  ComTrava com_trava;
+  const uint64_t agora = agora_ms();
+  if (relogio.ativar_autonomo(agora, config::espera_hora_ms)) {
+    emissor.emitir_log(relogio.t(agora), protocolo::Nivel::aviso,
+                       "Modo autonomo: t em ms desde boot");
+  }
+}
+
 // Lê o que a Pi manda. Os comandos chegam raramente (o $H a cada 60 s); ler a cada poucos ms
 // basta e quase não soma atraso ao $H.
 void tarefa_leitura(void *) {
@@ -77,6 +88,7 @@ void tarefa_leitura(void *) {
         aplicar(protocolo::interpretar(leitor.tipo(), leitor.campos()));
       }
     }
+    conferir_prazo_da_hora();
     vTaskDelay(pdMS_TO_TICKS(config::serial_periodo_leitura_ms));
   }
 }
@@ -91,14 +103,15 @@ void iniciar() {
   if (saida == nullptr || trava == nullptr) {
     abort();
   }
+  // No núcleo 0, com o $S e o SD: o núcleo 1 fica só para a aquisição (proposta §4.6, #21).
   if (xTaskCreatePinnedToCore(tarefa_escrita, "serial_pi", config::serial_pilha_escrita, nullptr,
                               config::serial_prioridade_escrita, nullptr,
-                              tskNO_AFFINITY) != pdPASS) {
+                              config::saida_nucleo) != pdPASS) {
     abort();
   }
   if (xTaskCreatePinnedToCore(tarefa_leitura, "serial_pi_leitura", config::serial_pilha_leitura,
                               nullptr, config::serial_prioridade_leitura, nullptr,
-                              tskNO_AFFINITY) != pdPASS) {
+                              config::saida_nucleo) != pdPASS) {
     abort();
   }
 }
@@ -111,7 +124,7 @@ void emitir_boot(protocolo::MotivoReset motivo) {
 void emitir_status(protocolo::Status status) {
   ComTrava com_trava;
   // Com a trava, o estado e o t saem da mesma leitura do relógio: nunca ESPERA com t.
-  status.estado = relogio.acertado() ? protocolo::Estado::ativo : protocolo::Estado::espera;
+  status.estado = relogio.ativo() ? protocolo::Estado::ativo : protocolo::Estado::espera;
   status.obd_hz_decimos = obd_hz_em_uso;
   emissor.emitir_status(relogio.t(agora_ms()), status);
 }
@@ -143,7 +156,7 @@ uint16_t obd_hz_decimos() {
 
 bool ativo() {
   ComTrava com_trava;
-  return relogio.acertado();
+  return relogio.ativo();
 }
 
 namespace {

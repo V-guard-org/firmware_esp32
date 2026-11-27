@@ -42,6 +42,19 @@ class CartaoDeTeste final : public Cartao {
     return true;
   }
 
+  // Como o cartão do ESP32: o primeiro "SEMnnnnn.csv" que ainda não existe.
+  bool abrir_sem_hora() override {
+    ++aberturas_sem_hora;
+    for (unsigned n = 1; n <= 99999; ++n) {
+      char nome[tamanho_nome];
+      std::snprintf(nome, sizeof(nome), "SEM%05u.csv", n);
+      if (conteudo(nome)[0] == '\0') {
+        return abrir(nome);
+      }
+    }
+    return false;
+  }
+
   bool escrever(const char *texto, size_t tamanho) override {
     ++escritas;
     if (falhar_ao_escrever || atual == nullptr ||
@@ -74,6 +87,7 @@ class CartaoDeTeste final : public Cartao {
   size_t quantidade = 0;
   Arquivo *atual = nullptr;
   int aberturas = 0;
+  int aberturas_sem_hora = 0;
   int escritas = 0;
   bool falhar_ao_abrir = false;
   bool falhar_ao_escrever = false;
@@ -314,6 +328,100 @@ static void teste_erro_ao_escrever_para_de_gravar() {
   TEST_ASSERT_EQUAL_INT(1, cartao.aberturas);
 }
 
+// --- Modo autônomo, sem $H (#21) ---
+
+constexpr const char *aviso_sem_hora = "# SEM_HORA: t em ms desde boot; nao e Unix\n";
+
+// O cabeçalho, o aviso do arquivo sem a hora e as linhas.
+void conferir_sem_hora(const char *esperado_sem_cabecalho, const char *conteudo) {
+  char esperado[2048];
+  std::snprintf(esperado, sizeof(esperado), "%s%s%s", cabecalho, aviso_sem_hora,
+                esperado_sem_cabecalho);
+  TEST_ASSERT_EQUAL_STRING(esperado, conteudo);
+}
+
+static void teste_autonomo_grava_no_arquivo_sem_hora() {
+  CartaoDeTeste cartao;
+  Registro registro(cartao, versao);
+  receber(registro, "B,0,0,0.7.0-1a2b3c4,LIGOU");
+  receber(registro, "S,1,0,0,ESPERA,PARADO,OK,OK,97,12.5,0");
+  TEST_ASSERT_EQUAL_INT(0, cartao.aberturas);
+  receber(registro, "L,121,120000,AVISO,Modo autonomo: t em ms desde boot");
+  receber(registro, "A,122,120020,0.12,-0.05,9.79");
+  // Uma hora depois, o mesmo arquivo: sem a hora, não há virada.
+  receber(registro, "S,123,3600001,3600,ATIVO,ESCUTANDO,OK,OK,97,12.5,0");
+  TEST_ASSERT_EQUAL_UINT(1, cartao.quantidade);
+  TEST_ASSERT_EQUAL_INT(1, cartao.aberturas_sem_hora);
+  conferir_sem_hora(
+      "B,0,0,0.7.0-1a2b3c4,LIGOU\n"
+      "L,121,120000,AVISO,Modo autonomo: t em ms desde boot\n"
+      "A,122,120020,0.12,-0.05,9.79\n"
+      "S,123,3600001,3600,ATIVO,ESCUTANDO,OK,OK,97,12.5,0\n",
+      cartao.conteudo("SEM00001.csv"));
+  TEST_ASSERT_FALSE(registro.falhou());
+}
+
+static void teste_hora_depois_do_autonomo_passa_aos_arquivos_da_hora() {
+  CartaoDeTeste cartao;
+  Registro registro(cartao, versao);
+  receber(registro, "B,0,0,0.7.0-1a2b3c4,LIGOU");
+  receber(registro, "A,122,120020,0.12,-0.05,9.79");
+  receber(registro, "H,1794099493000");
+  receber(registro, "A,123,1794099493020,0.12,-0.05,9.79");
+  receber(registro, "A,124,1794099600000,0.12,-0.05,9.79");  // a virada, já com a hora
+  TEST_ASSERT_EQUAL_UINT(3, cartao.quantidade);
+  // O arquivo sem a hora fica como estava; o $B não se repete no da hora.
+  conferir_sem_hora("B,0,0,0.7.0-1a2b3c4,LIGOU\nA,122,120020,0.12,-0.05,9.79\n",
+                    cartao.conteudo("SEM00001.csv"));
+  conferir("H,1794099493000\nA,123,1794099493020,0.12,-0.05,9.79\n",
+           cartao.conteudo("20261108-00.csv"));
+  conferir("A,124,1794099600000,0.12,-0.05,9.79\n", cartao.conteudo("20261108-01.csv"));
+}
+
+static void teste_cada_boot_autonomo_tem_arquivo_proprio() {
+  CartaoDeTeste cartao;
+  {
+    Registro primeiro(cartao, versao);
+    receber(primeiro, "A,122,120020,0.12,-0.05,9.79");
+  }
+  Registro segundo(cartao, versao);
+  receber(segundo, "A,122,120020,0.20,-0.05,9.79");
+  conferir_sem_hora("A,122,120020,0.12,-0.05,9.79\n", cartao.conteudo("SEM00001.csv"));
+  conferir_sem_hora("A,122,120020,0.20,-0.05,9.79\n", cartao.conteudo("SEM00002.csv"));
+}
+
+static void teste_hora_a_tempo_nao_abre_arquivo_sem_hora() {
+  CartaoDeTeste cartao;
+  Registro registro(cartao, versao);
+  receber(registro, "B,0,0,0.7.0-1a2b3c4,LIGOU");
+  receber(registro, "H,1794099493000");
+  receber(registro, "A,3,1794099493320,0.12,-0.05,9.79");
+  TEST_ASSERT_EQUAL_INT(0, cartao.aberturas_sem_hora);
+  TEST_ASSERT_EQUAL_UINT(1, cartao.quantidade);
+}
+
+static void teste_erro_ao_abrir_sem_hora_para_de_gravar() {
+  CartaoDeTeste cartao;
+  cartao.falhar_ao_abrir = true;
+  Registro registro(cartao, versao);
+  receber(registro, "A,122,120020,0.12,-0.05,9.79");
+  TEST_ASSERT_TRUE(registro.falhou());
+  cartao.falhar_ao_abrir = false;
+  receber(registro, "H,1794099493000");
+  TEST_ASSERT_EQUAL_UINT(0, cartao.quantidade);
+}
+
+static void teste_erro_ao_passar_para_a_hora_mantem_o_arquivo_sem_hora() {
+  CartaoDeTeste cartao;
+  Registro registro(cartao, versao);
+  receber(registro, "A,122,120020,0.12,-0.05,9.79");
+  cartao.falhar_ao_abrir = true;
+  receber(registro, "H,1794099493000");
+  TEST_ASSERT_TRUE(registro.falhou());
+  TEST_ASSERT_EQUAL_UINT(1, cartao.quantidade);
+  conferir_sem_hora("A,122,120020,0.12,-0.05,9.79\n", cartao.conteudo("SEM00001.csv"));
+}
+
 int main() {
   UNITY_BEGIN();
   RUN_TEST(teste_nome_pela_hora_utc);
@@ -329,5 +437,11 @@ int main() {
   RUN_TEST(teste_aceita_cr_antes_do_lf);
   RUN_TEST(teste_erro_ao_abrir_para_de_gravar);
   RUN_TEST(teste_erro_ao_escrever_para_de_gravar);
+  RUN_TEST(teste_autonomo_grava_no_arquivo_sem_hora);
+  RUN_TEST(teste_hora_depois_do_autonomo_passa_aos_arquivos_da_hora);
+  RUN_TEST(teste_cada_boot_autonomo_tem_arquivo_proprio);
+  RUN_TEST(teste_hora_a_tempo_nao_abre_arquivo_sem_hora);
+  RUN_TEST(teste_erro_ao_abrir_sem_hora_para_de_gravar);
+  RUN_TEST(teste_erro_ao_passar_para_a_hora_mantem_o_arquivo_sem_hora);
   return UNITY_END();
 }

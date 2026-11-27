@@ -298,6 +298,18 @@ class TestConferenciaDaHora(unittest.TestCase):
         self.assertIsNone(c.maior_distancia_ms)
         self.assertFalse(c.falhou())
 
+    def test_t_do_modo_autonomo_conta_a_parte(self):
+        # Sem $H por 120 s, o t é o tempo desde o boot (#21): não é hora para conferir.
+        c = Conferencia()
+        c.linha(boot(), HORA)
+        mensagens = c.linha(ativo(1, 120, 120005), HORA)
+        c.linha(ativo(2, 121, 121005), HORA + 1000)
+        self.assertEqual(2, c.autonomas)
+        self.assertEqual(0, c.fora_da_hora)
+        self.assertIsNone(c.maior_distancia_ms)
+        self.assertTrue(any("modo autônomo" in m for m in mensagens))
+        self.assertIn("linhas no modo autônomo (t desde o boot): 2", c.resumo())
+
     def test_espera_ate_3_s_depois_do_h_passa(self):
         c = Conferencia()
         c.linha(boot(), HORA)

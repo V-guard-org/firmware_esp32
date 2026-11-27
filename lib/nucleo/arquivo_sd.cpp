@@ -92,6 +92,7 @@ void Registro::linha_completa() {
   const char tipo = texto[0];
   // Com o \n, no lugar do *.
   texto[tamanho_texto] = '\n';
+  const uint64_t t = t_da_linha(texto, tamanho_texto);
 
   bool gravar_boot = false;
   if (!tem_hora_) {
@@ -99,15 +100,31 @@ void Registro::linha_completa() {
       std::memcpy(boot_, texto, tamanho_texto + 1);
       tamanho_boot_ = tamanho_texto + 1;
     }
-    if (tipo != 'H') {
-      return;
+    if (tipo == 'H') {
+      tem_hora_ = true;
+      if (autonomo_) {
+        // O arquivo sem a hora fica como está: a partir deste $H, os arquivos de cada hora.
+        autonomo_ = false;
+        tem_arquivo_ = false;
+      } else {
+        gravar_boot = tamanho_boot_ > 0;
+      }
+    } else {
+      // Em ESPERA (t = 0) não grava. Uma hora Unix sem $H não existe: só o t do modo autônomo,
+      // o tempo desde o boot, abre o arquivo sem a hora.
+      if (t == 0 || t >= protocolo::hora_minima_ms) {
+        return;
+      }
+      if (!autonomo_) {
+        if (!abrir_sem_hora()) {
+          return;
+        }
+        gravar_boot = tamanho_boot_ > 0;
+      }
     }
-    tem_hora_ = true;
-    gravar_boot = tamanho_boot_ > 0;
   }
 
-  const uint64_t t = t_da_linha(texto, tamanho_texto);
-  if (t != 0 && (!tem_arquivo_ || t / ms_por_hora != hora_) && !abrir_arquivo(t)) {
+  if (tem_hora_ && t != 0 && (!tem_arquivo_ || t / ms_por_hora != hora_) && !abrir_arquivo(t)) {
     return;
   }
   if (!tem_arquivo_) {
@@ -128,6 +145,20 @@ bool Registro::abrir_arquivo(uint64_t t) {
   }
   tem_arquivo_ = true;
   hora_ = t / ms_por_hora;
+  return gravar_cabecalho();
+}
+
+bool Registro::abrir_sem_hora() {
+  if (!cartao_.abrir_sem_hora()) {
+    falhou_ = true;
+    return false;
+  }
+  autonomo_ = tem_arquivo_ = true;
+  constexpr char aviso[] = "# SEM_HORA: t em ms desde boot; nao e Unix\n";
+  return gravar_cabecalho() && gravar(aviso, sizeof(aviso) - 1);
+}
+
+bool Registro::gravar_cabecalho() {
   constexpr char inicio[] = "# V-GUARD ";
   constexpr char separador[] = " | ";
   return gravar(inicio, sizeof(inicio) - 1) && gravar(versao_, std::strlen(versao_)) &&

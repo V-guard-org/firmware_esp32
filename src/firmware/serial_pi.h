@@ -5,10 +5,12 @@
 // descartadas (proposta §5.5).
 //
 // Entrada: outra tarefa lê as linhas da Pi (proposta §5.4). O $H acerta o relógio e põe o
-// ESP32 em ATIVO; o $C,obd_hz muda a taxa do OBD. O $H ou o $C inválido gera um $L AVISO.
+// ESP32 em ATIVO; o $C,obd_hz muda a taxa do OBD. O $H ou o $C inválido gera um $L AVISO. Sem
+// $H até 120 s depois do boot, a mesma tarefa põe o ESP32 em ATIVO no modo autônomo, com um $L
+// AVISO (proposta §4.2, #21). As duas tarefas ficam no núcleo 0.
 //
-// O t de toda linha emitida vem desse relógio: o horário Unix em ms, ou 0 em ESPERA. As
-// funções podem ser chamadas de qualquer tarefa.
+// O t de toda linha emitida vem desse relógio: o horário Unix em ms; no modo autônomo, o tempo
+// desde o boot; 0 em ESPERA. As funções podem ser chamadas de qualquer tarefa.
 #pragma once
 
 #include <cstdint>
@@ -38,7 +40,7 @@ void emitir_pids(uint32_t mapa00, uint32_t mapa20, uint32_t mapa40);
 // A taxa do OBD em uso, pelo último $C válido: em décimos de pedido por segundo (125 é 12.5).
 uint16_t obd_hz_decimos();
 
-// Recebeu algum $H: o ESP32 está em ATIVO.
+// Recebeu algum $H, ou passou o prazo sem ele (o modo autônomo, #21): o ESP32 está em ATIVO.
 bool ativo();
 
 }  // namespace vguard::serial_pi

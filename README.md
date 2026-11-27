@@ -10,11 +10,24 @@ Placa: ESP32 clássico de 30 pinos, do tipo DevKit V1 (`board = esp32dev`).
 
 | Peça | Barramento | Pinos |
 |---|---|---|
-| MCP2515 + TJA1050 | 1º SPI (VSPI) | SCK 18, MISO 19, MOSI 23, CS 25 |
-| microSD | 2º SPI (HSPI) | SCK 27, MISO 32, MOSI 33, CS 26 |
+| MCP2515 + TJA1050 | 1º SPI (VSPI) | SCK 14, MISO 12, MOSI 13, CS 15 |
+| microSD | 2º SPI (HSPI) | SCK 18, MISO 19, MOSI 23, CS 5 |
 | ADXL345 | I²C, endereço 0x53 | SDA 21, SCL 22 |
 
-No código, os pinos estão em `src/firmware/config.h`.
+São os pinos da placa soldada pelo Nicolas. O GPIO12 decide a tensão da memória flash no boot: em nível alto ao ligar, o ESP32 não inicia. No código, os pinos estão em `src/firmware/config.h`.
+
+## Boot e modo autônomo
+
+O ESP32 liga em `ESPERA` e passa a `ATIVO` com o primeiro `$H` da Pi. Sem `$H` até 120 s depois do boot, ele entra em `ATIVO` sozinho, no **modo autônomo**:
+
+- **O aviso:** sai uma vez `$L,<seq>,<t>,AVISO,Modo autonomo: t em ms desde boot`.
+- **O `t`:** é o tempo desde o boot, em ms, e não a hora Unix. Os campos e o checksum são os mesmos.
+- **O cartão:** grava em `SEMnnnnn.csv`, um arquivo novo por boot, com o primeiro número livre.
+- **Um `$H` depois:** passa o `t` à hora Unix e o cartão aos arquivos de cada hora, sem reiniciar. O `SEM` fica como está.
+
+As tarefas ficam fixas por núcleo: a aquisição (CAN e ADXL345) sozinha no núcleo 1; a serial, o `$S` e a gravação do SD no núcleo 0.
+
+A placa também roda o mesmo firmware reorganizado para a Arduino IDE (`can_sd_adxl_serial_rtos`, versão `0.10.1-soldado-rtos`), guardado como veio no ramo `soldado-rtos-arduino`, na pasta `arduino/`. O código de referência é o deste projeto do PlatformIO.
 
 ## Compilar, gravar e testar
 
@@ -40,7 +53,7 @@ O `esp32-sim` é o mesmo firmware com uma central simulada no lugar do MCP2515, 
 | `uv run ferramentas/bancada.py --segundos 300` | Captura 5 min e mostra só os problemas, o que foi mandado e o resumo. Sai com erro se houver linha corrompida, lacuna na `seq`, `t` a mais de 1 s do notebook, `ESPERA` mais de 3 s depois do `$H`, fora de 49 a 51 `$A` entre dois `$S` em `ATIVO` ou `descartadas` acima de 0 |
 | `uv run ferramentas/bancada.py --reiniciar` | Reinicia o ESP32 pelo EN ao abrir a porta, para pegar o `$B` |
 | `uv run ferramentas/bancada.py --enviar C,obd_hz,15` | Manda a linha com a moldura (`$C,obd_hz,15*63`). Pode repetir; as linhas saem com 2 s de intervalo |
-| `uv run ferramentas/bancada.py --sem-hora` | Não manda o `$H`, para ver o ESP32 em `ESPERA` |
+| `uv run ferramentas/bancada.py --sem-hora` | Não manda o `$H`, para ver o ESP32 em `ESPERA` e, depois de 120 s, no modo autônomo. As linhas com o `t` desde o boot são contadas à parte, e não como fora da hora |
 | `uv run ferramentas/bancada.py --sem-imu` | Não confere a taxa do `$A`, para a bancada sem o ADXL345 ligado |
 | `uv run ferramentas/bancada.py --antes-da-virada 10` | A hora mandada começa 10 s antes da próxima hora cheia (UTC) e segue deslocada, também nos `$H` seguintes e na conferência do `t`. Serve para ver a troca de arquivo do SD |
 | `uv run ferramentas/bancada.py --salvar captura.txt` | Guarda as linhas válidas e os `$H` mandados, para comparar com o cartão |
@@ -54,6 +67,8 @@ Para só ver a serial, sem conferir nada: `pio device monitor` (115200 baud).
 ## Log no microSD
 
 Em `ATIVO`, tudo o que o ESP32 manda pela serial também vai para o cartão, mais os `$H` recebidos, num arquivo por hora: `AAAAMMDD-HH.csv`, na hora UTC. Cada linha é a da serial sem o `$` e sem o `*hh`, e cada arquivo começa com um cabeçalho (`#`) com a versão e as colunas. O cartão precisa estar em FAT32.
+
+No modo autônomo, sem a hora, o arquivo é o `SEMnnnnn.csv`. Depois do cabeçalho vem a linha `# SEM_HORA: t em ms desde boot; nao e Unix`. O `comparar_sd.py` foi feito para os arquivos de cada hora e não confere os `SEM`.
 
 Para conferir o cartão contra uma captura da ferramenta de bancada:
 

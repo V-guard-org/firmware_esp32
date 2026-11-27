@@ -37,6 +37,9 @@ class Cartao {
   // Abre o arquivo para acrescentar no fim, e o cria se ele não existe. O anterior é fechado.
   // Devolve false se não deu.
   virtual bool abrir(const char *nome) = 0;
+  // Abre um arquivo novo para o modo autônomo, sem a hora (#21): "SEMnnnnn.csv", com o primeiro
+  // número livre, para nunca continuar o de outro boot. Devolve false se não deu.
+  virtual bool abrir_sem_hora() = 0;
   // Acrescenta o texto no fim do arquivo aberto. Devolve false se não deu.
   virtual bool escrever(const char *texto, size_t tamanho) = 0;
 
@@ -46,8 +49,12 @@ class Cartao {
 
 // Decide o que vai para o cartão (proposta §4.5). Recebe, na ordem, as linhas como saíram na
 // serial (com a moldura) e os $H recebidos da Pi, também com a moldura:
-// - antes do primeiro $H, nada é gravado. O $B fica guardado e é gravado logo que a hora chega,
+// - em ESPERA (t = 0), nada é gravado. O $B fica guardado e é gravado logo que a hora chega,
 //   antes do $H;
+// - no modo autônomo (#21), sem $H, o t é o tempo desde o boot. Na primeira linha assim, abre
+//   um arquivo sem a hora (Cartao::abrir_sem_hora), com o cabeçalho, o aviso "# SEM_HORA" e o
+//   $B guardado, e grava nele as linhas seguintes, sem trocar de arquivo a cada hora. Um $H
+//   depois passa aos arquivos de cada hora e deixa o arquivo sem a hora como está;
 // - cada linha vai sem o $ e sem o *hh: "A,57,1793980812457,0.12,-0.05,9.79";
 // - o arquivo é o da hora UTC do t de cada linha (no $H, o unix_ms). Quando a hora muda, para a
 //   frente ou para trás, abre o arquivo dessa hora, que pode já existir, e escreve nele o
@@ -68,6 +75,8 @@ class Registro {
  private:
   void linha_completa();
   bool abrir_arquivo(uint64_t t);
+  bool abrir_sem_hora();
+  bool gravar_cabecalho();
   bool gravar(const char *texto, size_t tamanho);
 
   Cartao &cartao_;
@@ -83,6 +92,8 @@ class Registro {
   size_t tamanho_boot_ = 0;
 
   bool tem_hora_ = false;
+  // Gravando no arquivo sem a hora, do modo autônomo.
+  bool autonomo_ = false;
   bool tem_arquivo_ = false;
   // A hora do arquivo aberto, em horas desde 01/01/1970.
   uint64_t hora_ = 0;
