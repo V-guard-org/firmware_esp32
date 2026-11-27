@@ -38,8 +38,9 @@ O que conta como problema:
   a seq no primeiro campo;
 - perdida: cada número que falta na seq;
 - fora de ordem: a seq andou para trás sem voltar a 0;
-- fora da hora: o t da linha a mais de 1 s da hora do notebook na chegada (o t 0, sem hora, não
-  conta);
+- fora da hora: o t da linha a mais de 1 s da hora do notebook na chegada. O t 0, sem hora, não
+  conta, nem o t do modo autônomo (antes de 01/01/2026: o tempo desde o boot, sem $H por 120 s,
+  #21), que só é contado à parte;
 - continua em ESPERA: um $S com ESPERA mais de 3 s depois de um $H mandado pela ferramenta;
 - taxa do $A: entre dois $S seguidos em ATIVO, menos de 49 ou mais de 51 $A. --sem-imu não
   confere, para as bancadas sem o ADXL345 ligado;
@@ -70,6 +71,8 @@ VIDS_DA_PLACA = {0x10C4: "CP210x", 0x1A86: "WCH"}
 TIPOS_RAROS = {"B", "L", "P"}
 # O t pode estar até 1 s da hora do notebook (critério do #3).
 DISTANCIA_MAXIMA_MS = 1000
+# Um t abaixo do piso do $H (01/01/2026) é o tempo desde o boot, do modo autônomo (#21).
+HORA_MINIMA_MS = 1767225600000
 # Depois de um $H, o ESP32 tem até 3 s para o $S sair de ESPERA.
 PRAZO_PARA_ATIVO_MS = 3000
 # Entre dois $S em ATIVO (1 s), 50 $A, com 1 de folga pela fase entre as duas tarefas (#4).
@@ -145,6 +148,8 @@ class Conferencia:
         self.saltos_uptime = 0
         self.horas_enviadas = 0
         self.fora_da_hora = 0
+        # Linhas com o t do modo autônomo (o tempo desde o boot), fora da conferência da hora.
+        self.autonomas = 0
         self.esperas = 0
         # Intervalos entre dois $S em ATIVO com o $A fora de 49 a 51, e o menor e o maior.
         self.fora_da_taxa = 0
@@ -213,6 +218,7 @@ class Conferencia:
                 "nenhum t para comparar" if self.maior_distancia_ms is None
                 else f"{self.maior_distancia_ms:+d} ms"),
             f"  linhas com o t a mais de 1 s do notebook: {self.fora_da_hora}",
+            f"  linhas no modo autônomo (t desde o boot): {self.autonomas}",
             f"  $S em ESPERA mais de 3 s depois do $H: {self.esperas}",
             "  $A entre dois $S em ATIVO: " + (
                 "não conferido (--sem-imu)" if not self.conferir_taxa_do_a
@@ -284,7 +290,13 @@ class Conferencia:
 
     def _conferir_hora(self, linha: Valida, hora_ms: int) -> list[str]:
         mensagens = []
-        if len(linha.campos) > 2 and linha.campos[2].isdigit() and linha.campos[2] != "0":
+        autonoma = (len(linha.campos) > 2 and linha.campos[2].isdigit()
+                    and 0 < int(linha.campos[2]) < HORA_MINIMA_MS)
+        if autonoma:
+            if self.autonomas == 0:
+                mensagens.append("-- modo autônomo: o t é o tempo desde o boot")
+            self.autonomas += 1
+        elif len(linha.campos) > 2 and linha.campos[2].isdigit() and linha.campos[2] != "0":
             distancia = int(linha.campos[2]) - hora_ms
             if self.maior_distancia_ms is None or abs(distancia) > abs(self.maior_distancia_ms):
                 self.maior_distancia_ms = distancia

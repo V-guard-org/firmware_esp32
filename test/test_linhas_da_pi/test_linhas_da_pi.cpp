@@ -234,6 +234,48 @@ static void teste_relogio_acerta_de_novo_a_cada_hora() {
   TEST_ASSERT_EQUAL_UINT64(1793980872434ULL, relogio.t(65000));
 }
 
+// --- Modo autônomo, sem $H (#21) ---
+
+constexpr uint64_t prazo = 120000;
+
+static void teste_relogio_autonomo_so_no_prazo() {
+  Relogio relogio;
+  TEST_ASSERT_FALSE(relogio.ativo());
+  TEST_ASSERT_FALSE(relogio.ativar_autonomo(119999, prazo));
+  TEST_ASSERT_EQUAL_UINT64(0, relogio.t(119999));
+  TEST_ASSERT_TRUE(relogio.ativar_autonomo(120000, prazo));
+  TEST_ASSERT_TRUE(relogio.ativo());
+  TEST_ASSERT_FALSE(relogio.acertado());
+  // O t é o tempo desde o boot, e a passagem só é avisada uma vez.
+  TEST_ASSERT_EQUAL_UINT64(120010, relogio.t(120010));
+  TEST_ASSERT_FALSE(relogio.ativar_autonomo(120010, prazo));
+}
+
+static void teste_relogio_hora_antes_do_prazo_nao_entra_no_autonomo() {
+  Relogio relogio;
+  relogio.acertar(1793980812437ULL, 119999);
+  TEST_ASSERT_FALSE(relogio.ativar_autonomo(120000, prazo));
+  TEST_ASSERT_TRUE(relogio.ativo());
+  TEST_ASSERT_EQUAL_UINT64(1793980812438ULL, relogio.t(120000));
+}
+
+static void teste_relogio_hora_depois_do_autonomo_volta_a_hora_unix() {
+  Relogio relogio;
+  TEST_ASSERT_TRUE(relogio.ativar_autonomo(120000, prazo));
+  relogio.acertar(1793980812437ULL, 130000);
+  TEST_ASSERT_TRUE(relogio.acertado());
+  TEST_ASSERT_EQUAL_UINT64(1793980812487ULL, relogio.t(130050));
+  TEST_ASSERT_FALSE(relogio.ativar_autonomo(200000, prazo));
+}
+
+static void teste_relogio_autonomo_depois_de_49_dias() {
+  // O tempo desde o boot passa dos 32 bits em ~49,7 dias.
+  Relogio relogio;
+  constexpr uint64_t depois_de_49_dias = (1ULL << 32) + 500;
+  TEST_ASSERT_TRUE(relogio.ativar_autonomo(depois_de_49_dias, prazo));
+  TEST_ASSERT_EQUAL_UINT64(depois_de_49_dias, relogio.t(depois_de_49_dias));
+}
+
 int main() {
   UNITY_BEGIN();
   RUN_TEST(teste_hora_do_exemplo_da_proposta);
@@ -252,5 +294,9 @@ int main() {
   RUN_TEST(teste_relogio_sem_hora_da_t_zero);
   RUN_TEST(teste_relogio_acertado_conta_a_partir_da_hora);
   RUN_TEST(teste_relogio_acerta_de_novo_a_cada_hora);
+  RUN_TEST(teste_relogio_autonomo_so_no_prazo);
+  RUN_TEST(teste_relogio_hora_antes_do_prazo_nao_entra_no_autonomo);
+  RUN_TEST(teste_relogio_hora_depois_do_autonomo_volta_a_hora_unix);
+  RUN_TEST(teste_relogio_autonomo_depois_de_49_dias);
   return UNITY_END();
 }

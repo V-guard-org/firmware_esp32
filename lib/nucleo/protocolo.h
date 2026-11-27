@@ -195,25 +195,44 @@ struct Comando {
 // Interpreta o tipo e os campos de uma linha aceita pelo Leitor.
 Comando interpretar(char tipo, const char *campos);
 
-// O relógio do ESP32 (proposta §5.2): o horário Unix em ms, a partir do último $H. Quem chama
-// passa o tempo desde o boot, em ms.
+// O relógio do ESP32 (proposta §4.2 e §5.2): o horário Unix em ms, a partir do último $H. Sem
+// $H até o prazo, o modo autônomo: o t passa a ser o tempo desde o boot (#21). Quem chama passa
+// o tempo desde o boot, em ms.
 class Relogio {
  public:
-  // Cada $H acerta de novo, num salto: com o $H a cada 60 s, o desvio é de poucos ms.
+  // Cada $H acerta de novo, num salto: com o $H a cada 60 s, o desvio é de poucos ms. Um $H
+  // depois do modo autônomo passa o t à hora Unix, sem reiniciar.
   void acertar(uint64_t unix_ms, uint64_t agora_ms) {
     diferenca_ = unix_ms - agora_ms;
     acertado_ = true;
+    autonomo_ = false;
   }
 
-  // Recebeu algum $H: o ESP32 está em ATIVO.
+  // Sem $H até o prazo, contado desde o boot, entra no modo autônomo. Devolve true só na
+  // passagem, para quem chama avisar uma vez.
+  bool ativar_autonomo(uint64_t agora_ms, uint64_t prazo_ms) {
+    if (acertado_ || autonomo_ || agora_ms < prazo_ms) {
+      return false;
+    }
+    autonomo_ = true;
+    return true;
+  }
+
+  // Com a hora ou no modo autônomo: o ESP32 está em ATIVO.
+  bool ativo() const { return acertado_ || autonomo_; }
+
+  // Recebeu algum $H: o t é a hora Unix.
   bool acertado() const { return acertado_; }
 
-  // O t das linhas: o horário Unix em ms, ou 0 sem a hora.
-  uint64_t t(uint64_t agora_ms) const { return acertado_ ? agora_ms + diferenca_ : 0; }
+  // O t das linhas: o horário Unix em ms; no modo autônomo, o tempo desde o boot; 0 em ESPERA.
+  uint64_t t(uint64_t agora_ms) const {
+    return acertado_ ? agora_ms + diferenca_ : (autonomo_ ? agora_ms : 0);
+  }
 
  private:
   uint64_t diferenca_ = 0;
   bool acertado_ = false;
+  bool autonomo_ = false;
 };
 
 }  // namespace vguard::protocolo

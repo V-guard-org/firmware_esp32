@@ -6,6 +6,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/stream_buffer.h>
 #include <freertos/task.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include <atomic>
@@ -52,6 +53,22 @@ class CartaoSd final : public arquivo_sd::Cartao {
     // Sem o buffer do stdio: o bloco já junta 1 s de linhas, e assim o erro aparece no fwrite.
     std::setvbuf(arquivo_, nullptr, _IONBF, 0);
     return true;
+  }
+
+  // O modo autônomo (#21): o primeiro "SEMnnnnn.csv" que ainda não existe, para nunca continuar
+  // o arquivo de outro boot sem a hora.
+  bool abrir_sem_hora() override {
+    for (unsigned numero = 1; numero <= 99999; ++numero) {
+      char nome[arquivo_sd::tamanho_nome];
+      std::snprintf(nome, sizeof(nome), "SEM%05u.csv", numero);
+      char caminho[16 + arquivo_sd::tamanho_nome];
+      std::snprintf(caminho, sizeof(caminho), "%s/%s", ponto_de_montagem, nome);
+      struct stat informacoes;
+      if (stat(caminho, &informacoes) != 0) {
+        return abrir(nome);
+      }
+    }
+    return false;
   }
 
   bool escrever(const char *texto, size_t tamanho) override {
@@ -159,7 +176,7 @@ void iniciar() {
     return;
   }
   if (xTaskCreatePinnedToCore(tarefa, "gravacao_sd", config::sd_pilha, nullptr,
-                              config::sd_prioridade, nullptr, config::sd_nucleo) != pdPASS) {
+                              config::sd_prioridade, nullptr, config::saida_nucleo) != pdPASS) {
     abort();
   }
 }
